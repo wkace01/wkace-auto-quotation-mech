@@ -1,0 +1,733 @@
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.8/dist/web/static/pretendard.css");
+
+:root {
+    /* Toss UI Colors */
+    --toss-blue: #3182f6;
+    --toss-blue-hover: #1b64da;
+    --toss-bg: #f2f4f6;
+    --toss-card-bg: #ffffff;
+    --toss-text-main: #191f28;
+    --toss-text-sub: #4e5968;
+    --toss-text-muted: #8b95a1;
+    --toss-border: #e5e8eb;
+    --toss-red: #f04452;
+    --toss-red-bg: #fee9eb;
+    --toss-green: #34c759;
+    --toss-green-bg: #e1f5e8;
+    --toss-input-bg: #f2f4f6;
+    
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+    
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body, input, select, textarea, button, table, td, th {
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif !important;
+    letter-spacing: -0.01em;
+}
+
+/* Hide native number input arrows */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none !important;
+    margin: 0 !important;
+}
+input[type="number"] {
+    -moz-appearance: textfield !important;
+    appearance: textfield !important;
+}
+
+body {
+    background-color: var(--toss-bg);
+    color: var(--toss-text-main);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Header */
+header {
+    background: var(--toss-card-bg);
+    padding: 2.5rem 1rem 2rem;
+    text-align: center;
+    border-bottom: 1px solid var(--toss-border);
+    margin-bottom: 1.5rem;
+}
+
+.header-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.header-badge {
+    color: var(--toss-blue);
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+header h1 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--toss-text-main);
+    letter-spacing: -0.5px;
+}
+
+/* Layout & Container */
+.main-wrapper {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1rem 4rem;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    width: 100%;
+}
+
+@media (min-width: 769px) {
+    .container {
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 2rem;
+    }
+    
+    .left-panel {
+        flex: 1;
+        max-width: 55%;
+    }
+    
+    .right-panel {
+        flex: 1;
+        position: sticky;
+        top: 2rem;
+        /* prevent it from scrolling away while left column is long */
+    }
+
+    /* Center Layout for Step 1 when right panel is empty */
+    .container.step1-mode {
+        justify-content: center;
+    }
+    
+    .container.step1-mode .left-panel {
+        max-width: 650px;
+        flex: 0 1 650px;
+    }
+    
+    .container.step1-mode .right-panel {
+        display: none !important;
+    }
+}
+
+/* Step Wizard Navigation */
+.step-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.step-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--toss-text-muted);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.step-indicator.active {
+    color: var(--toss-blue);
+}
+
+.step-indicator.completed {
+    color: var(--toss-text-main);
+}
+
+.step-divider {
+    color: var(--toss-border);
+    font-size: 0.8rem;
+}
+
+@media (max-width: 500px) {
+    .step-nav {
+        gap: 0.5rem;
+    }
+    .step-indicator {
+        font-size: 0.8rem;
+    }
+    /* "1. 주소 검색" 등 텍스트를 너무 좁은 화면에서는 아이콘만 보이게 하거나 작게 유지 */
+    .step-indicator span {
+        font-size: 0.8rem;
+    }
+}
+
+/* Step Animations */
+.step-content {
+    display: none;
+    opacity: 0;
+    transform: translateX(10px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.step-content.active {
+    display: block;
+    opacity: 1;
+    transform: translateX(0);
+}
+
+/* Bottom Nav Buttons for Steps */
+.step-actions {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1.5rem;
+    gap: 1rem;
+}
+
+.step-actions .btn-prev {
+    background: #ffffff !important;
+    color: var(--toss-text-sub) !important;
+    border: 1px solid #d1d6db !important;
+    border-radius: var(--radius-md) !important;
+    padding: 0.85rem 1.5rem !important;
+    font-weight: 600 !important;
+    font-size: 1rem !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.5rem !important;
+    flex: 1 !important;
+    transition: all 0.2s ease !important;
+    appearance: none !important;
+}
+
+.step-actions .btn-prev:hover {
+    background: #f2f4f6 !important;
+}
+
+.step-actions .btn-prev:active {
+    transform: scale(0.98) !important;
+}
+
+.step-actions .btn-next-primary {
+    background: var(--toss-blue) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: var(--radius-md) !important;
+    padding: 0.85rem 1.5rem !important;
+    font-weight: 600 !important;
+    font-size: 1rem !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.5rem !important;
+    flex: 2 !important;
+    transition: all 0.2s ease !important;
+    appearance: none !important;
+}
+
+.step-actions .btn-next-primary:hover {
+    background: var(--toss-blue-hover) !important;
+}
+
+.step-actions .btn-next-primary:active {
+    transform: scale(0.98) !important;
+}
+
+/* Card */
+.card {
+    background: var(--toss-card-bg);
+    border-radius: var(--radius-xl);
+    padding: 1.5rem;
+    box-shadow: var(--shadow-sm);
+    border: none;
+}
+
+.card-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 1.25rem;
+    color: var(--toss-text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    letter-spacing: -0.3px;
+}
+
+/* Forms */
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .form-grid.two-cols {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+}
+
+label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--toss-text-sub);
+    margin-bottom: 0.5rem;
+}
+
+input, select {
+    width: 100%;
+    padding: 0.85rem 1rem;
+    background-color: var(--toss-input-bg);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-size: 1rem;
+    color: var(--toss-text-main);
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+input:focus, select:focus {
+    outline: none;
+    border-color: var(--toss-blue);
+    background-color: var(--toss-card-bg);
+    box-shadow: 0 0 0 3px rgba(49, 130, 246, 0.15);
+}
+
+input::placeholder {
+    color: var(--toss-text-muted);
+}
+
+input[readonly] {
+    background-color: var(--toss-bg);
+    color: var(--toss-text-muted);
+}
+
+/* Address Box Custom Style */
+#address {
+    background-color: #e8f3ff;
+    color: var(--toss-blue);
+    font-weight: 600;
+}
+
+/* Buttons */
+button {
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s ease;
+}
+
+#btn-fetch-building {
+    background: var(--toss-blue);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1.25rem;
+    font-weight: 600;
+    font-size: 1rem;
+    width: 100%;
+}
+
+#btn-fetch-building:active {
+    background: var(--toss-blue-hover);
+    transform: scale(0.98);
+}
+
+#btn-apply-building {
+    background: var(--toss-text-main);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+#btn-reset-addr, #btn-restore-cond {
+    background: var(--toss-input-bg);
+    color: var(--toss-text-sub);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+#btn-reset-addr:hover, #btn-restore-cond:hover {
+    background: #e5e8eb;
+}
+
+/* Building Result Panel */
+#building-result-panel {
+    background: var(--toss-input-bg);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+#building-result-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+}
+
+/* Conditions List */
+.cond-group-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--toss-text-muted);
+    margin: 1.5rem 0 0.5rem;
+}
+
+.cond-group-title:first-child {
+    margin-top: 0.5rem;
+}
+
+.cond-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--toss-bg);
+}
+
+.cond-row:last-child {
+    border-bottom: none;
+}
+
+.cond-label {
+    font-size: 0.95rem;
+    color: var(--toss-text-main);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.cond-field {
+    width: 120px !important;
+    text-align: right;
+    padding: 0.4rem 0.5rem !important;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+.cond-field:focus {
+    background: var(--toss-card-bg);
+    border-radius: var(--radius-sm);
+}
+
+.cond-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: var(--toss-input-bg);
+    padding: 0.25rem;
+    border-radius: var(--radius-md);
+}
+
+.btn-adj, .btn-adj-discount {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: var(--toss-card-bg);
+    color: var(--toss-text-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.btn-adj:active, .btn-adj-discount:active {
+    background: var(--toss-border);
+    transform: scale(0.95);
+}
+
+/* Item Toggles */
+.btn-toggle-item {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    padding: 0;
+    color: var(--toss-text-muted);
+}
+.btn-toggle-item .fa-minus-circle { color: var(--toss-text-muted); }
+.btn-toggle-item .fa-plus-circle { color: var(--toss-blue); }
+
+.cond-row.item-disabled {
+    opacity: 0.4;
+}
+
+/* Highlighted labels */
+#cond-yearly-total {
+    font-weight: 800;
+    color: var(--toss-blue);
+    font-size: 1.1rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+#cond-monthly-total {
+    font-weight: 700;
+    font-size: 1rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+/* Summary Grid - Toss Style */
+.summary-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.stat-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    background: var(--toss-input-bg);
+    border-radius: var(--radius-md);
+}
+
+.stat-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--toss-text-sub);
+}
+
+.stat-value {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--toss-text-main);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.stat-card.highlight {
+    background: #e8f3ff;
+}
+.stat-card.highlight .stat-value,
+.stat-card.highlight .stat-label {
+    color: var(--toss-blue);
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+    display: none;
+}
+.tab-btn {
+    padding: 0.6rem 1rem;
+    background: var(--toss-input-bg);
+    color: var(--toss-text-sub);
+    border-radius: 100px;
+    border: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+.tab-btn.active {
+    background: var(--toss-text-main);
+    color: var(--toss-card-bg);
+}
+
+.tab-content {
+    display: none;
+}
+.tab-content.active {
+    display: block;
+}
+
+/* Data Table */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+.data-table th,
+.data-table td {
+    padding: 0.75rem 0.25rem;
+    text-align: left;
+    border-bottom: 1px solid var(--toss-border);
+}
+.data-table th {
+    color: var(--toss-text-muted);
+    font-weight: 600;
+}
+.data-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* Bottom Actions */
+#card-bottom-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.export-btn {
+    padding: 1.1rem;
+    border-radius: var(--radius-md);
+    font-weight: 700;
+    font-size: 1.05rem;
+    width: 100%;
+    border: none;
+    text-align: center;
+}
+
+#btn-save-pdf {
+    background: var(--toss-blue);
+    color: white;
+}
+
+#btn-save-pdf:active {
+    background: var(--toss-blue-hover);
+    transform: scale(0.98);
+}
+
+#btn-view-json {
+    background: var(--toss-text-main);
+    color: white;
+}
+
+#btn-view-json:active {
+    transform: scale(0.98);
+}
+
+/* Badges / inline hints */
+.hint-text {
+    font-size: 0.8rem;
+    color: var(--toss-text-muted);
+    margin-top: 0.25rem;
+    display: block;
+}
+
+#floor-grade {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--toss-blue);
+}
+
+#sheet-status-bar {
+    background: var(--toss-input-bg);
+    color: var(--toss-text-main);
+}
+
+/* Word-break strategy to prevent awkward wrapping (e.g. 대상물(고객명) 이 잘리지 않게) */
+body, .stat-label, .stat-value, .data-table td, .data-table th, .cond-label, .card-title, button {
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+
+.status-msg-mobile { display: none; }
+.status-msg-pc { display: inline; }
+
+/* --- Mobile Specific Overrides --- */
+@media (max-width: 768px) {
+    .status-msg-pc { display: none; }
+    .status-msg-mobile { display: block; line-height: 1.6; }
+    
+    .container {
+        padding: 0 0.5rem;
+    }
+    .form-grid.two-cols {
+        grid-template-columns: 1fr !important;
+    }
+    #building-result-content {
+        grid-template-columns: 1fr !important;
+    }
+    .cond-row {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    .cond-field {
+        width: 100% !important;
+        text-align: right;
+    }
+}
+
+@media (max-width: 500px) {
+    /* Step 2 Conditions Panel Adjustments */
+    .cond-controls {
+        width: 100%;
+        justify-content: space-between;
+    }
+    .cond-field {
+        text-align: center;
+    }
+
+    /* Step 2 Summary Card Adjustments */
+    .stat-card {
+        padding: 0.8rem 1rem;
+    }
+    .summary-grid > div[style*="display:flex"] {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    /* Step 3 Data Table Adjustments */
+    .data-table {
+        font-size: 0.8rem;
+    }
+    .data-table th, .data-table td {
+        padding: 0.6rem 0.2rem;
+    }
+    
+    .card-title {
+        font-size: 1.15rem;
+    }
+}
+
+
+/* VAT toggle buttons */
+.btn-vat {
+    padding: 0.3rem 1rem;
+    border: 1px solid var(--toss-blue);
+    border-radius: 6px;
+    background: white;
+    color: var(--toss-blue);
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-vat.active-vat {
+    background: var(--toss-blue);
+    color: white;
+}

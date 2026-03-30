@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build & Output files
+temp_pdf/
+*.pdf
+
+# Test / Debug scripts and files
+test_*.js
+test_*.xlsx
+test_*.pdf
+debug_*.xlsx
+*_json.xlsx
+*_통일.xlsx
+260123_견적서양식_정보통신영업본부*.xlsx
+*빈페이지*.xlsx
+*ver2.xlsx
+
+# Misc
+GAS.js
+unify_sheet_sizes.py
+
+# Keep the official exact templates tracked
+!정보통신사업부 견적서 양식_ver1.xlsx
+!정보통신사업부 견적서 양식_ver2.xlsx
+
+# Environment variables (API keys - NEVER commit!)
+.env
+.env.local
+.env.*.local
