@@ -10,7 +10,7 @@
 
 window.DIVISION_CONFIG = {
     name: "기계사업부",
-    excelTemplate: "26-A-0001 견적서(일반면적)_에이스방재.xlsx",
+    excelTemplate: "26-A-0001 견적서(일반면적)_에이스방재_양식.xlsx",
     airtablePdfFieldId: "fldXXXXXXXXXXXXXX",   // 추후 Airtable 연동 시 교체
 
     // PDF/Excel 출력 대상 시트
