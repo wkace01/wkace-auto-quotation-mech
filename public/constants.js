@@ -1,108 +1,202 @@
 /**
- * constants.js — 사업부 기준 데이터 (견적 조건표, 단가, 담당자 목록 등)
+ * constants.js — 기계사업부 기준 데이터
  *
- * ====================================================================
- * CUSTOMIZE: 새 사업부 적용 시 이 파일의 데이터를 교체하세요.
- *
- * 교체 대상:
- *   - QUOTATION_CONDITIONS   : 연면적 구간별 등급 및 기본 단가 테이블
- *   - ADJUSTMENT_COEFFICIENTS: 연면적 조정계수 테이블
- *   - SALES_MANAGERS         : 영업 담당자 목록 (이름, 전화번호)
- *   - GRADE_WAGES            : 등급별 노임단가 (점검 인력용)
- *   - APPOINTMENT_WAGES      : 위탁선임 전용 노임단가 (없으면 빈 객체 {}로 유지)
- *   - GRADE_STYLES           : 등급별 색상 (UI 표시용)
- *   - GRADE_ORDER            : 등급 정렬 순서 배열 (높은 등급 → 낮은 등급)
- *   - COND_RANGE_LABELS      : 연면적 구간 표시 레이블 (계산식 표시용)
- *
- * division_config.js의 items[] id와 조건표 필드명이 일치해야 합니다.
- * 예) items id="inspection" → condition.yearlyInspection, condition.inspectionWorkers
- * ====================================================================
+ * 주요 데이터:
+ *   - QUOTATION_CONDITIONS        : 등급별 위탁선임 단가 (연면적 기반)
+ *   - AREA_GRADE_THRESHOLDS       : 연면적 기준 등급 임계값
+ *   - HOUSEHOLD_GRADE_THRESHOLDS  : 세대수 기준 등급 임계값 (공동주택/아파트)
+ *   - ADJUSTMENT_COEFFICIENTS     : fallback 단일값 (기계사업부는 미사용)
+ *   - SALES_MANAGERS              : 기계사업부 영업 담당자
+ *   - GRADE_WAGES                 : 특급/고급/중급 노임단가
+ *   - APPOINTMENT_WAGES           : 위탁선임 등급별 월 단가
+ *   - GRADE_STYLES / GRADE_ORDER  : 3등급 체계
+ *   - EQUIPMENT_INSPECTION_RATES  : 설비별 산출 점검수량 비율
+ *   - EQUIPMENT_RATIOS            : 설비별 기술자 투입 비율
+ *   - EQUIPMENT_GROUPS            : 설비 입력 UI 그룹 구조
  */
 window.CONSTANTS = {
-    // CUSTOMIZE: 연면적 구간별 견적 조건표 — 사업부 기준 단가로 교체하세요.
+
+    // ─── 등급 기준 임계값 ───────────────────────────────────────────────────
+
+    // 연면적(㎡) 기준 등급 (공동주택 외)
+    AREA_GRADE_THRESHOLDS: [
+        { area: 1,     grade: '초급' },   // ~15,000㎡
+        { area: 15001, grade: '중급' },   // 15,001~30,000㎡
+        { area: 30001, grade: '고급' },   // 30,001~60,000㎡
+        { area: 60001, grade: '특급' },   // 60,000㎡ 초과
+    ],
+
+    // 세대수 기준 등급 (공동주택/아파트)
+    // 300세대 미만: 해당 없음 (빈 문자열 반환)
+    // 300~499세대(중앙집중식·지역난방): 초급 — API에서 난방방식 미제공, 초급 일괄 적용
+    HOUSEHOLD_GRADE_THRESHOLDS: [
+        { count: 300,  grade: '초급' },   // 300~999세대
+        { count: 1000, grade: '중급' },   // 1,000~1,999세대
+        { count: 2000, grade: '고급' },   // 2,000~2,999세대
+        { count: 3000, grade: '특급' },   // 3,000세대 이상
+    ],
+
+    // ─── 위탁선임 단가 조건표 (등급별) ──────────────────────────────────────
+    // inspection/maintenance 필드 없음 — 기계사업부는 설비 수량 계산으로 대체
     QUOTATION_CONDITIONS: [
-        // 5,000이상 ~ 10,000미만: 초급
-        { area: 5000,   grade: "초급", monthlyAppointment:  80000, yearlyAppointment:  960000, yearlyMaintenance:  360000, yearlyInspection: 1080000, inspectionWorkers: 4, maintenanceWorkers: 4 },
-        // 10,000이상 ~ 15,000미만: 초급
-        { area: 10000,  grade: "초급", monthlyAppointment:  80000, yearlyAppointment:  960000, yearlyMaintenance:  405000, yearlyInspection: 1335000, inspectionWorkers: 4, maintenanceWorkers: 4 },
-        // 15,000이상 ~ 30,000미만: 중급
-        { area: 15000,  grade: "중급", monthlyAppointment: 130000, yearlyAppointment: 1560000, yearlyMaintenance:  450000, yearlyInspection:  990000, inspectionWorkers: 6, maintenanceWorkers: 6 },
-        // 30,000이상 ~ 60,000미만: 고급
-        { area: 30000,  grade: "고급", monthlyAppointment: 150000, yearlyAppointment: 1800000, yearlyMaintenance:  630000, yearlyInspection: 1770000, inspectionWorkers: 8, maintenanceWorkers: 8 },
-        // 60,000이상 ~ 150,000미만: 특급
-        { area: 60000,  grade: "특급", monthlyAppointment: 180000, yearlyAppointment: 2160000, yearlyMaintenance:  810000, yearlyInspection: 2430000, inspectionWorkers: 10, maintenanceWorkers: 10 },
-        // 150,000이상: 특급
-        { area: 150000, grade: "특급", monthlyAppointment: 180000, yearlyAppointment: 2160000, yearlyMaintenance:  810000, yearlyInspection: 2430000, inspectionWorkers: 10, maintenanceWorkers: 10 }
+        { area: 1,     grade: '초급', monthlyAppointment: 600000, yearlyAppointment: 7200000 },
+        { area: 15001, grade: '중급', monthlyAppointment: 650000, yearlyAppointment: 7800000 },
+        { area: 30001, grade: '고급', monthlyAppointment: 700000, yearlyAppointment: 8400000 },
+        { area: 60001, grade: '특급', monthlyAppointment: 700000, yearlyAppointment: 8400000 },
     ],
 
-    // CUSTOMIZE: 연면적 조정계수 표 — 사업부 기준으로 교체하세요.
+    // fallback용 (lookupCoef 반환값 항상 존재하도록, 실제 계산엔 미사용)
     ADJUSTMENT_COEFFICIENTS: [
-        { area: 5000,   coef: 1.15 },  // 5,000  이상 ~ 10,000 미만
-        { area: 10000,  coef: 1.30 },  // 10,000 이상 ~ 15,000 미만
-        { area: 15000,  coef: 1.45 },  // 15,000 이상 ~ 20,000 미만
-        { area: 20000,  coef: 1.60 },  // 20,000 이상 ~ 25,000 미만
-        { area: 25000,  coef: 1.75 },  // 25,000 이상 ~ 30,000 미만
-        { area: 30000,  coef: 1.90 },  // 30,000 이상 ~ 35,000 미만
-        { area: 35000,  coef: 2.05 },  // 35,000 이상 ~ 40,000 미만
-        { area: 40000,  coef: 2.20 },  // 40,000 이상 ~ 45,000 미만
-        { area: 45000,  coef: 2.35 },  // 45,000 이상 ~ 50,000 미만
-        { area: 50000,  coef: 2.50 },  // 50,000 이상 ~ 55,000 미만
-        { area: 55000,  coef: 2.65 },  // 55,000 이상 ~ 60,000 미만
-        { area: 60000,  coef: 2.80 },  // 60,000 이상
+        { area: 0, coef: 1.0 },
     ],
 
-    // CUSTOMIZE: 영업 담당자 목록 — 사업부 담당자로 교체하세요.
+    // ─── 담당자 ─────────────────────────────────────────────────────────────
     SALES_MANAGERS: [
-        { name: "박진철", phone: "010-7130-8285" },
-        { name: "임학빈", phone: "010-4259-2044" },
-        { name: "전무승", phone: "010-5269-5357" },
-        { name: "김태훈", phone: "010-5393-1308" },
-        { name: "이정국", phone: "010-5474-3414" },
-        { name: "이승학", phone: "010-2395-5603" },
-        { name: "김학수", phone: "010-3255-2473" },
-        { name: "김찬진", phone: "010-2027-5011" },
-        { name: "신홍민", phone: "010-6550-7169" },
-        { name: "한춘교", phone: "010-9162-2995" },
-        { name: "박민수", phone: "010-4458-3472" },
-        { name: "이우현", phone: "010-2494-4756" },
-        { name: "고윤성", phone: "010-2871-5485" }
+        { name: '고윤성', phone: '010-2871-5485' },
+        { name: '김찬진', phone: '010-2027-5011' },
+        { name: '김태훈', phone: '010-5393-1308' },
+        { name: '김학수', phone: '010-3255-2473' },
+        { name: '박민수', phone: '010-7169-6011' },
+        { name: '박진철', phone: '010-7130-8285' },
+        { name: '신홍민', phone: '010-6550-7169' },
+        { name: '이우현', phone: '010-4093-6011' },
+        { name: '이정국', phone: '010-5474-3414' },
+        { name: '임학빈', phone: '010-4259-2044' },
+        { name: '전무승', phone: '010-5269-5357' },
+        { name: '최광범', phone: '010-9471-6011' },
+        { name: '한춘교', phone: '010-9162-2995' },
     ],
 
-    // CUSTOMIZE: 등급별 UI 색상 — 등급 체계가 달라지면 수정하세요.
+    // ─── 등급 체계 ───────────────────────────────────────────────────────────
+    GRADE_ORDER: ['특급', '고급', '중급', '초급'],
+
     GRADE_STYLES: {
         '초급': { color: '#2563eb', label: '초급' },
         '중급': { color: '#16a34a', label: '중급' },
         '고급': { color: '#d97706', label: '고급' },
-        '특급': { color: '#dc2626', label: '특급' }
+        '특급': { color: '#dc2626', label: '특급' },
     },
 
-    // CUSTOMIZE: 점검 인력 등급별 노임단가 (원/인·일) — 사업부 기준으로 교체하세요.
+    // ─── 노임단가 (정부고시, 원/인·일) ─────────────────────────────────────
     GRADE_WAGES: {
-        '특급': 330713,
-        '고급': 301470,
-        '중급': 272298,
-        '초급': 234973,
+        '특급': 401407,
+        '고급': 335379,
+        '중급': 300463,
     },
 
-    // CUSTOMIZE: 위탁선임 전용 노임단가 (월 단가 기준, 점검 인력과 별도)
-    // 위탁선임 항목이 없는 사업부는 빈 객체 {} 로 변경하세요.
+    // ─── 위탁선임 월 단가 (등급별) ──────────────────────────────────────────
     APPOINTMENT_WAGES: {
-        '특급': 180000,
-        '고급': 150000,
-        '중급': 130000,
-        '초급':  80000,
+        '초급': 600000,
+        '중급': 650000,
+        '고급': 700000,
+        '특급': 700000,
     },
 
-    // CUSTOMIZE: 등급 정렬 순서 (높은 등급 → 낮은 등급 순으로 나열)
-    GRADE_ORDER: ['특급', '고급', '중급', '초급'],
-
-    // CUSTOMIZE: 연면적 구간 레이블 (조건표 area 값과 키가 일치해야 함)
+    // ─── 연면적 구간 레이블 ──────────────────────────────────────────────────
     COND_RANGE_LABELS: {
-        5000:   "5,000 ≤ 연면적 < 10,000",
-        10000:  "10,000 ≤ 연면적 < 15,000",
-        15000:  "15,000 ≤ 연면적 < 30,000",
-        30000:  "30,000 ≤ 연면적 < 60,000",
-        60000:  "60,000 ≤ 연면적 < 150,000",
-        150000: "150,000㎡ 이상"
-    }
+        1:     '연면적 15,000㎡ 이하',
+        15001: '15,001㎡ ~ 30,000㎡',
+        30001: '30,001㎡ ~ 60,000㎡',
+        60001: '60,000㎡ 초과',
+    },
+
+    // ─── 설비별 산출 점검수량 비율 (수량산출기준 시트 E열 로직) ─────────────
+    EQUIPMENT_INSPECTION_RATES: {
+        '계획검토':         { rate: 1.00, method: 'direct' },
+        '시스템검토':       { rate: 1.00, method: 'direct' },
+        '냉동기':           { rate: 1.00, method: 'direct' },
+        '냉각탑':           { rate: 1.00, method: 'direct' },
+        '축열':             { rate: 1.00, method: 'direct' },
+        '보일러':           { rate: 1.00, method: 'direct' },
+        '열교환기':         { rate: 1.00, method: 'direct' },
+        '팽창탱크':         { rate: 1.00, method: 'direct' },
+        '펌프':             { rate: 1.00, method: 'direct' },
+        '신재생에너지':     { rate: 1.00, method: 'direct' },
+        '패키지에어컨':     { rate: 1.00, method: 'direct' },
+        '항온항습기':       { rate: 1.00, method: 'direct' },
+        '공기조화기':       { rate: 1.00, method: 'direct' },
+        '팬코일유닛':       { rate: 1.00, method: 'direct' },
+        '환기설비':         { rate: 1.00, method: 'direct' },
+        '필터':             { rate: 1.00, method: 'direct' },
+        '위생기구설비':     { rate: 1.00, method: 'direct' },
+        '급수펌프급탕탱크': { rate: 1.00, method: 'direct' },
+        '고저수조':         { rate: 1.00, method: 'direct' },
+        '오배수통기우수':   { rate: 1.00, method: 'direct' },
+        '오수정화설비':     { rate: 1.00, method: 'direct' },
+        '물재이용설비':     { rate: 1.00, method: 'direct' },
+        '배관설비':         { rate: 1.00, method: 'direct' },
+        '덕트설비':         { rate: 1.00, method: 'direct' },
+        '보온설비':         { rate: 1.00, method: 'direct' },
+        '자동제어설비':     { rate: 1.00, method: 'direct' },
+        '방음방진내진':     { rate: 1.00, method: 'direct' },
+    },
+
+    // ─── 설비별 기술자 투입 비율 (수량조정계수 시트, 명세서 4.3절) ──────────
+    // s=특급, h=고급, m=중급 / _접두어: 고정수량(1) 항목
+    EQUIPMENT_RATIOS: {
+        '계획검토':         { s: 3.58, h: 0,    m: 0    },
+        '시스템검토':       { s: 3.58, h: 0,    m: 0    },
+        '냉동기':           { s: 0.13, h: 0.28, m: 0.16 },
+        '냉각탑':           { s: 0.10, h: 0.25, m: 0.17 },
+        '축열':             { s: 0.10, h: 0.27, m: 0.17 },
+        '보일러':           { s: 0.10, h: 0.28, m: 0.19 },
+        '열교환기':         { s: 0.04, h: 0.16, m: 0.11 },
+        '팽창탱크':         { s: 0.02, h: 0.16, m: 0.07 },
+        '펌프':             { s: 0.10, h: 0.21, m: 0.13 },
+        '신재생에너지':     { s: 0.09, h: 0.23, m: 0.09 },
+        '패키지에어컨':     { s: 0.04, h: 0.11, m: 0.17 },
+        '항온항습기':       { s: 0.08, h: 0.16, m: 0.18 },
+        '공기조화기':       { s: 0.04, h: 0.18, m: 0.11 },
+        '팬코일유닛':       { s: 0.04, h: 0.11, m: 0.13 },
+        '환기설비':         { s: 0.04, h: 0.11, m: 0.13 },
+        '필터':             { s: 0.04, h: 0.10, m: 0.10 },
+        '위생기구설비':     { s: 0.04, h: 0.35, m: 0.20 },
+        '급수펌프급탕탱크': { s: 0.04, h: 0.23, m: 0.10 },
+        '고저수조':         { s: 0.04, h: 0.21, m: 0.13 },
+        '오배수통기우수':   { s: 0.04, h: 0.29, m: 0.17 },
+        '오수정화설비':     { s: 0.04, h: 0.29, m: 0.17 },
+        '물재이용설비':     { s: 0.04, h: 0.29, m: 0.17 },
+        '배관설비':         { s: 0.04, h: 1.13, m: 1.25 },
+        '덕트설비':         { s: 0.04, h: 0.52, m: 0.40 },
+        '보온설비':         { s: 0.04, h: 0.96, m: 1.00 },
+        '자동제어설비':     { s: 0.10, h: 0.75, m: 0.50 },
+        '방음방진내진':     { s: 0.04, h: 0.47, m: 0.42 },
+        '_보고서작성':      { s: 0.42, h: 2.46, m: 2.71 },
+    },
+
+    // ─── 설비 입력 UI 그룹 (index.html 동적 렌더링용) ───────────────────────
+    EQUIPMENT_GROUPS: [
+        {
+            group: '공통 검토 항목',
+            items: ['계획검토', '시스템검토'],
+        },
+        {
+            group: '환경 검토 및 열원 설비',
+            items: ['냉동기', '냉각탑', '축열', '보일러', '열교환기', '팽창탱크', '펌프', '신재생에너지', '패키지에어컨', '항온항습기'],
+        },
+        {
+            group: '공기조화설비',
+            items: ['공기조화기', '팬코일유닛'],
+        },
+        {
+            group: '환기설비',
+            items: ['환기설비', '필터'],
+        },
+        {
+            group: '위생기구설비',
+            items: ['위생기구설비'],
+        },
+        {
+            group: '급수·급탕설비',
+            items: ['급수펌프급탕탱크', '고저수조', '오배수통기우수'],
+        },
+        {
+            group: '오수정화 및 물재이용설비',
+            items: ['오수정화설비', '물재이용설비'],
+        },
+        {
+            group: '기타 설비',
+            items: ['배관설비', '덕트설비', '보온설비', '자동제어설비', '방음방진내진'],
+        },
+    ],
 };

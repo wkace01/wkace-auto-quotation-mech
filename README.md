@@ -1,138 +1,114 @@
-# 견적서 자동화 템플릿
+# 기계사업부 견적 자동화 시스템
 
-![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)
-![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?logo=railway)
-![Airtable](https://img.shields.io/badge/DB-Airtable-18BFFF?logo=airtable&logoColor=white)
-![LibreOffice](https://img.shields.io/badge/PDF-LibreOffice-83C3C8)
-
-> 연면적 입력 하나로 **견적서 PDF 자동 생성 + Airtable DB 자동 저장**까지 완료하는 사업부 공통 견적 자동화 템플릿
-
----
+> 기계설비 성능점검 · 유지점검 · 위탁선임 비용을 자동으로 산출하고 엑셀(PDF) 견적서를 생성하는 웹 애플리케이션입니다.
 
 ## 주요 기능
 
-| 기능 | 설명 |
+- **견적 자동 산출** — 연면적 및 설비 수량 입력 시 엔지니어링 표준품셈 기반으로 인원·비용 자동 계산
+- **3개 항목 개별 제어** — 성능점검 / 유지점검 / 위탁선임 항목별 활성/비활성 토글
+- **엑셀·PDF 출력** — LibreOffice를 통해 견적서 / 산출내역 / 수량산출기준 3개 시트를 PDF로 변환
+- **실시간 요약 패널** — 입력값 변경 즉시 합계 금액 업데이트
+- **Airtable 자동 저장** — 견적 데이터를 Airtable 베이스에 자동 동기화
+- **관리자 산출 디버깅** — 설비별 기술자 투입 비율, 인원 할인율 적용 과정, 등급별 인건비를 성능점검/유지점검 섹션으로 시각화
+
+## 기술 스택
+
+| 구분 | 기술 |
 |------|------|
-| 🔍 주소 자동 조회 | 카카오 우편번호 API + 건축물대장 API로 연면적·용도 자동 입력 |
-| 🧮 견적 자동 계산 | 연면적 → 등급 판별 → 항목별 금액 즉시 계산 |
-| ⚙️ 실시간 조정 | 배수·할인율·부가세·항목 ON/OFF 실시간 반영 |
-| 📄 PDF 1클릭 생성 | Excel 템플릿 → LibreOffice → PDF 자동 변환 |
-| 🗄️ DB 자동 저장 | PDF 생성과 동시에 Airtable에 고객·견적 정보 저장 |
-| 📱 모바일 지원 | URL 접속만으로 PC·모바일 어디서든 사용 가능 |
+| Frontend | Vanilla HTML / CSS / JavaScript |
+| Backend | Node.js + Express |
+| PDF 변환 | LibreOffice (headless) |
+| 엑셀 처리 | xlsx-populate, ExcelJS |
+| 데이터 저장 | Airtable REST API |
+| 배포 | Railway |
 
----
-
-## 파일 구조
+## 프로젝트 구조
 
 ```
-quotation-automation-template/
-  ├── public/
-  │   ├── division_config.js   ← ✏️ 사업부마다 수정 (항목 정의·계산·Excel 매핑)
-  │   ├── constants.js         ← ✏️ 등급표·단가 데이터 교체
-  │   ├── app_step.js          ← ✅ 범용 계산 엔진 (수정 불필요)
-  │   ├── index.html           ← ✅ 범용 UI (수정 불필요)
-  │   ├── common.js            ← ✅ 주소·건물 API 유틸
-  │   ├── airtable_service.js  ← ✅ Airtable DB 연동
-  │   └── toss_step_style.css  ← ✅ 스타일
-  ├── template/
-  │   └── [사업부명]_양식.xlsx  ← 🔄 사업부별 Excel 양식으로 교체
-  ├── server.js                ← 백엔드 서버
-  ├── Dockerfile               ← Railway 배포용
-  ├── .env.example             ← 환경변수 예시
-  └── DIVISION_SETUP.md        ← 신규 사업부 상세 적용 가이드
+├── server.js               # Express 서버 (PDF 생성 엔드포인트)
+├── public/
+│   ├── index.html          # 메인 UI
+│   ├── app_step.js         # 단계별 UI 로직 및 상태 관리
+│   ├── division_config.js  # 기계사업부 계산 로직 및 엑셀 매핑
+│   ├── constants.js        # 설비별 점검 비율, 노임단가 등 상수
+│   ├── common.js           # 공통 유틸리티
+│   ├── airtable_service.js # Airtable API 연동
+│   └── toss_step_style.css # 스타일시트
+├── template/               # 엑셀 템플릿 파일
+├── Dockerfile              # Railway 배포용
+├── .env.example            # 환경변수 예시
+└── package.json
 ```
 
-> ✅ 표시 파일은 **수정 없이 그대로 사용**, ✏️ 표시 파일만 사업부에 맞게 수정
+## 비용 산출 로직
 
----
-
-## 새 사업부 적용 방법 (5단계)
-
-### 1. 레포 복제
-```bash
-git clone https://github.com/wkace01/quotation-automation-template.git [사업부명]-quotation
-cd [사업부명]-quotation
-npm install
+```
+직접인건비 = Σ (투입인원 × 노임단가)
+직접경비   = 직접인건비 × 10%
+제경비     = 직접인건비 × 110%
+기술료     = (직접인건비 + 제경비) × 20%
+소계       = 직접인건비 + 직접경비 + 제경비 + 기술료
+최종금액   = 소계 (10만원 단위 절사)
 ```
 
-### 2. `constants.js` 수정
-등급표·단가 데이터를 해당 사업부 기준으로 교체
-```js
-QUOTATION_CONDITIONS: [
-  { area: 5000, grade: "초급", monthlyAppointment: ..., ... },
-  ...
-]
-```
-
-### 3. `division_config.js` 수정
-항목 이름, 계산 로직, Excel 셀 매핑을 사업부에 맞게 작성
-```js
-window.DIVISION_CONFIG = {
-  name: "○○사업부",
-  excelTemplate: "○○사업부_양식.xlsx",
-  items: [
-    { id: "item1", label: "항목명1", defaultFrequency: "1회" },
-    // 2~4개 자유롭게
-  ],
-  calculateCosts: function(condition, adjFactor, toggles, includeVAT) { ... },
-  generateExcelMapping: function(state, costs, adjFactor, laborData) { ... }
-};
-```
-
-### 4. Excel 양식 교체
-`template/` 폴더에 해당 사업부 Excel 견적서 양식 파일을 넣고,
-`division_config.js`의 `excelTemplate` 값을 파일명과 일치시킴
-
-### 5. Railway 배포
-- Railway → New Project → GitHub 레포 연결
-- 환경변수 설정 (아래 참고)
-- Dockerfile 자동 감지 → 자동 배포
-
-> 📖 **상세 가이드**: [`DIVISION_SETUP.md`](./DIVISION_SETUP.md) 참고
-
----
+- **노임단가** (정부고시 기준): 특급 401,407원 / 고급 335,379원 / 중급 300,463원
+- **인원 산출**: 설비 수량 × 항목별 투입 비율(EQUIPMENT_RATIOS) 합산 후 Math.floor()
+- **유지점검**: 특급기술자 미포함 (고급 + 중급만 산출)
 
 ## 환경변수 설정
 
-`.env.example`을 복사하여 `.env` 파일 생성 후 값 입력:
+`.env.example`을 복사하여 `.env` 파일을 생성합니다.
 
 ```bash
 cp .env.example .env
 ```
 
-| 변수명 | 설명 | 필수 |
-|--------|------|------|
-| `AIRTABLE_API_KEY` | Airtable → Developer Hub → Personal Access Tokens | ✅ |
-| `AIRTABLE_PDF_FIELD_ID` | PDF 첨부 파일 필드 ID (Airtable 필드 설정에서 확인) | ✅ |
-| `PORT` | 서버 포트 (기본값: 3001) | 선택 |
-
----
+| 변수명 | 설명 |
+|--------|------|
+| `AIRTABLE_API_KEY` | Airtable Personal Access Token |
+| `AIRTABLE_BASE_ID` | Airtable 베이스 ID |
+| `AIRTABLE_TABLE_NAME` | 저장 대상 테이블 이름 |
+| `PORT` | 서버 포트 (기본값: 3001) |
 
 ## 로컬 실행
 
 ```bash
+# 의존성 설치
 npm install
-cp .env.example .env   # 값 입력 후 저장
-node server.js
-# → http://localhost:3001 접속
+
+# 개발 서버 실행 (프론트 :3000 + 백엔드 :3001 동시 실행)
+npm run dev
 ```
 
----
+브라우저에서 `http://localhost:3000` 접속
 
-## 기술 스택
+## Railway 배포
 
-| 영역 | 기술 |
-|------|------|
-| 백엔드 | Node.js + Express |
-| PDF 변환 | LibreOffice (headless CLI) |
-| Excel 처리 | xlsx-populate |
-| 데이터베이스 | Airtable |
-| 주소 검색 | 카카오 우편번호 API |
-| 건물 정보 | 공공데이터포털 건축물대장 API |
-| 배포 | Railway (Docker) |
+1. Railway 프로젝트에 이 저장소 연결
+2. 환경변수 설정 (위 목록 참고)
+3. `npm start` 명령으로 자동 배포
 
----
+> ⚠️ LibreOffice가 설치된 환경이 필요합니다. `Dockerfile` 참고.
 
-## 라이선스
+## 개발 워크플로우
 
-내부 사용 전용 — 우경정보통신 정보통신사업부
+```bash
+# 새 기능 개발 시
+git checkout -b feature/기능명
+git commit -m "feat: 기능 설명"
+git push origin feature/기능명
+# → GitHub에서 PR 생성 → main 브랜치로 Merge
+```
+
+## 주요 파일 설명
+
+### `division_config.js`
+기계사업부 핵심 로직 파일입니다.
+- `calculateCosts()` — 설비 수량 → 인원 산출 → 비용 계산 전체 파이프라인
+- `generateExcelMapping()` — 계산 결과를 엑셀 셀 좌표에 매핑
+- `_buildMechBreakdown()` — 등급별 인건비 구조 계산
+
+### `constants.js`
+- `EQUIPMENT_INSPECTION_RATES` — 설비별 점검 수량 산출 방식
+- `EQUIPMENT_RATIOS` — 설비별 특급/고급/중급 투입 비율
+- `GRADE_WAGES` — 등급별 노임단가

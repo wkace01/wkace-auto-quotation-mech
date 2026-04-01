@@ -49,24 +49,39 @@ async function fetchBuildingRegister(info) {
     const items = xmlDoc.getElementsByTagName('item');
     const arr = Array.from(items);
 
-    // 주건축물(mainAtchGbCd === '0') 우선 선택
-    let target = arr.find(item => {
+    // 주건축물(mainAtchGbCd === '0') 전체 수집
+    // → 다동(多棟) 아파트의 경우 동마다 별도 row로 반환되므로 filter로 전부 모은 뒤 합산
+    const mainItems = arr.filter(item => {
         const gbCd = item.getElementsByTagName('mainAtchGbCd')[0]?.textContent;
         return gbCd === '0';
     });
-    if (!target) target = items[0];
+    // 주건축물이 없으면 전체 사용 (비정상 데이터 대응)
+    const targets = mainItems.length > 0 ? mainItems : arr;
+    // 대표값(주용도·건물명·사용승인일 등)은 첫 번째 항목에서 가져옴
+    const target = targets[0];
 
     const getVal = (tag) => target.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
 
+    // 연면적: 모든 주건축물 동의 합산 (다동 아파트 대응)
+    const sumTotArea = targets.reduce((sum, it) => {
+        return sum + parseFloat(it.getElementsByTagName('totArea')[0]?.textContent || '0');
+    }, 0);
+
+    // 세대수: 모든 주건축물 동의 합산 (동별로 hhldCnt가 분리되어 있음)
+    const sumHhldCnt = targets.reduce((sum, it) => {
+        return sum + parseInt(it.getElementsByTagName('hhldCnt')[0]?.textContent || '0', 10);
+    }, 0);
+
     // 기존 app.js에서 사용하던 공통 필드 객체 형태로 반환
     return {
-        totArea: getVal('totArea'),
+        totArea: sumTotArea.toFixed(2),         // 합산 연면적 (문자열, 소수점 2자리)
         mainPurpsCdNm: getVal('mainPurpsCdNm'),
         platArea: getVal('platArea'),
         archArea: getVal('archArea'),
         useAprDay: getVal('useAprDay'),
         bldNm: getVal('bldNm'),
-        mainAtchGbCdNm: getVal('mainAtchGbCdNm')
+        mainAtchGbCdNm: getVal('mainAtchGbCdNm'),
+        hhldCnt: sumHhldCnt,                    // 합산 세대수 (공동주택 다동 대응)
     };
 }
 

@@ -20,6 +20,8 @@ debug_*.xlsx
 # Misc
 GAS.js
 unify_sheet_sizes.py
+check_excel.py
+excel_output.txt
 
 # Keep the official exact templates tracked
 !정보통신사업부 견적서 양식_ver1.xlsx
@@ -29,3 +31,14 @@ unify_sheet_sizes.py
 .env
 .env.local
 .env.*.local
+
+# IDE / Tool configs
+.obsidian/
+.claude/
+
+# Archive & internal docs (not for deployment)
+_archive/
+기계사업부_견적서_로직_명세서_v2.md
+기계사업부_구현_현황_분석.md
+견적서 양식/
+견적서 원본/

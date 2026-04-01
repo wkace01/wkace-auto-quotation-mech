@@ -68,16 +68,15 @@ app.post('/generate-pdf', async (req, res) => {
     const expectedPdf = tempXlsx.replace('.xlsx', '.pdf');
 
     try {
-        const { templateName, outputSheets, data, airtableInfo, fileNameMeta } = req.body;
+        const { templateName, data, airtableInfo, fileNameMeta } = req.body;
         const actualData = data || req.body;
-        const actualSheets = outputSheets || Object.keys(actualData);
+        const outputSheets = req.body._outputSheets || req.body.outputSheets || ['견적서', '산출내역', '수량산출기준'];
 
         // CUSTOMIZE: templateName은 division_config.js의 excelTemplate 값이 전달됩니다.
         const templatePath = resolveTemplatePath(templateName);
         const workbook = await XlsxPopulate.fromFileAsync(templatePath);
-        workbook.sheets().forEach(sheet => {
-            if (!actualSheets.includes(sheet.name())) sheet.hidden('very');
-        });
+        const sheetsToRemove = workbook.sheets().map(s => s.name()).filter(name => !outputSheets.includes(name));
+        sheetsToRemove.forEach(name => workbook.deleteSheet(name));
 
         for (const [sheetName, cells] of Object.entries(actualData)) {
             const sheet = workbook.sheet(sheetName);
@@ -166,10 +165,9 @@ app.post('/upload-pdf-to-airtable', async (req, res) => {
 
         const templatePath = resolveTemplatePath(templateName);
         const workbook = await XlsxPopulate.fromFileAsync(templatePath);
-        const actualSheets = Object.keys(mapping);
-        workbook.sheets().forEach(sheet => {
-            if (!actualSheets.includes(sheet.name())) sheet.hidden('very');
-        });
+        const outputSheets = req.body._outputSheets || req.body.outputSheets || ['견적서', '산출내역', '수량산출기준'];
+        const sheetsToRemove = workbook.sheets().map(s => s.name()).filter(name => !outputSheets.includes(name));
+        sheetsToRemove.forEach(name => workbook.deleteSheet(name));
 
         for (const [sheetName, cells] of Object.entries(mapping)) {
             const sheet = workbook.sheet(sheetName);

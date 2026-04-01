@@ -45,11 +45,27 @@ const state = {
     includeVAT: false, // 부가세 포함 여부
     useMultiplier: false, // 견적 조정 배수 적용 여부
     multiplier: 1.5,      // 견적 조정 배수 (기본 1.5배)
+    // 기계사업부 전용
+    equipmentQty: Object.fromEntries(
+        Object.keys(window.CONSTANTS.EQUIPMENT_INSPECTION_RATES || {}).map(k => {
+            const defaultOne = [
+                '계획검토', '시스템검토',
+                '위생기구설비', '급수펌프급탕탱크', '고저수조', '오배수통기우수',
+                '배관설비', '덕트설비', '보온설비', '자동제어설비', '방음방진내진'
+            ];
+            return [k, defaultOne.includes(k) ? 1 : 0];
+        })
+    ),
+    세대수: 0,
     results: {
         grade: "",
         coef: 1,
         inspectionWorkers: 0,
         maintenanceWorkers: 0,
+        personnel: { senior: 0, high: 0, mid: 0 },
+        inspBreakdown: null,
+        maintBreakdown: null,
+        checkQty: {},
         costs: { inspection: 0, maintenance: 0, appointment: 0, yearly: 0, monthly: 0, vat: 0 }
     }
 };
@@ -82,20 +98,43 @@ function calcLaborBreakdown(workers, grade, wages = GRADE_WAGES) {
 }
 
 
-function calcFloorGrade(area) {
-    if (!area || area < 5000) return '';   // 5,000㎡ 미만은 해당 없음
-    if (area < 15000) return '초급';       // 5,000 이상 ~ 15,000 미만
-    if (area < 30000) return '중급';       // 15,000 이상 ~ 30,000 미만
-    if (area < 60000) return '고급';       // 30,000 이상 ~ 60,000 미만
-    return '특급';                          // 60,000 이상
+function calcFloorGrade(area, purpose, householdCount) {
+    const isApt = (purpose || '').includes('공동주택') || (purpose || '').includes('아파트');
+    if (isApt && householdCount > 0) {
+        // 세대수 기준 등급
+        const thresholds = window.CONSTANTS.HOUSEHOLD_GRADE_THRESHOLDS;
+        let grade = '';
+        for (const t of thresholds) {
+            if (householdCount >= t.count) grade = t.grade;
+        }
+        return grade;
+    }
+    // 연면적 기준 등급
+    if (!area || area < 1) return '';
+    const thresholds = window.CONSTANTS.AREA_GRADE_THRESHOLDS;
+    let grade = '';
+    for (const t of thresholds) {
+        if (area >= t.area) grade = t.grade;
+    }
+    return grade;
 }
 
-function updateGradeBadge(area) {
+// 등급으로 QUOTATION_CONDITIONS 조회
+function lookupConditionByGrade(grade) {
+    return QUOTATION_CONDITIONS.find(c => c.grade === grade) || null;
+}
+
+function updateGradeBadge(area, purpose, householdCount) {
     const el = document.getElementById('floor-grade');
     if (!el) return;
-    const grade = calcFloorGrade(area);
+    const grade = calcFloorGrade(area, purpose, householdCount);
     if (!grade) {
-        el.textContent = '연면적 입력 후 자동 분류';
+        const isApt = (purpose || '').includes('공동주택') || (purpose || '').includes('아파트');
+        if (isApt && householdCount > 0 && householdCount < 300) {
+            el.textContent = '해당 없음 (300세대 미만)';
+        } else {
+            el.textContent = '연면적 입력 후 자동 분류';
+        }
         el.style.color = 'var(--text-muted)';
         el.style.fontSize = '0.95rem';
         return;
@@ -126,53 +165,60 @@ function lookupCoef(area) {
 // ---- Calculation ----
 function calculate() {
     const area = state.floorArea || 0;
-    const condition = lookupCondition(area);
-    const coefObj = lookupCoef(area);
 
-    if (!condition || !coefObj) {
-        state.results.grade = "연면적 부족 (5,000㎡ 이상)";
+    // 기계사업부: 등급을 연면적/세대수 기준으로 계산 후 조건표 조회
+    const grade = calcFloorGrade(area, state.purpose, state.세대수);
+    const condition = grade ? lookupConditionByGrade(grade) : lookupCondition(area);
+
+    if (!condition) {
+        state.results.grade = "면적/세대수를 입력하세요";
         state.results.coef = 0;
         state.results.inspectionWorkers = 0;
         state.results.maintenanceWorkers = 0;
-        state.results.costs = { inspection: 0, maintenance: 0, appointment: 0, yearly: 0, monthly: 0 };
+        state.results.personnel = { senior: 0, high: 0, mid: 0 };
+        state.results.costs = { inspection: 0, maintenance: 0, appointment: 0, yearly: 0, monthly: 0, vat: 0 };
         updateUI();
         return;
     }
 
-    state.results.grade = condition.grade;
-    state.results.coef = coefObj.coef;
+    state.results.grade = grade || condition.grade;
+    state.results.coef = 1;  // 기계사업부는 조정계수 미사용
 
     // Auto-update grade badge
-    updateGradeBadge(area);
+    updateGradeBadge(area, state.purpose, state.세대수);
 
-    // Workers - 조건표의 인력값을 그대로 가져옴 (override 반영)
-    const eff = getEffectiveCond(condition);
-    state.results.inspectionWorkers = eff.inspectionWorkers;
-    state.results.maintenanceWorkers = eff.maintenanceWorkers;
+    // Workers - 기계사업부는 설비 수량 계산으로 대체
+    state.results.inspectionWorkers = 0;
+    state.results.maintenanceWorkers = 0;
 
-    // CUSTOMIZE(변경 2): costs 계산을 DIVISION_CONFIG.calculateCosts()에 위임
+    // CUSTOMIZE(변경 2): costs 계산 — condOverride에 appointmentFrequency 주입
     const baseCosts = DIVISION_CONFIG.calculateCosts(
         condition,
         getAdjFactor(),
         state.itemToggles,
         state.includeVAT,
-        state.condOverride
+        {
+            ...state.condOverride,
+            appointmentFrequency: state.condOverride.appointmentFrequency
+                ?? (parseInt(state.appointmentFrequency) || 12)
+        },
+        state.equipmentQty   // ← 기계사업부 전용
     );
-    state.results.costs.inspection  = baseCosts.inspection;
+    state.results.costs.inspection = baseCosts.inspection;
     state.results.costs.maintenance = baseCosts.maintenance;
     state.results.costs.appointment = baseCosts.appointment;
+    state.results.personnel = baseCosts.personnel || { senior: 0, high: 0, mid: 0 };
+    state.results.inspBreakdown = baseCosts.inspBreakdown || null;
+    state.results.maintBreakdown = baseCosts.maintBreakdown || null;
+    state.results.checkQty = baseCosts.checkQty || {};
+    state.results.personnelBreakdown = baseCosts.personnelBreakdown || [];
+    state.results.rawPersonnel = baseCosts.rawPersonnel || { sRaw: 0, hRaw: 0, mRaw: 0 };
 
-    // Total before discount (배수 적용)
+    // Total (기계사업부: mult/discount 미적용, 비용은 calculateCosts에서 확정)
     const baseSubtotal = baseCosts.inspection + baseCosts.maintenance + baseCosts.appointment;
-    const mult = state.useMultiplier ? state.multiplier : 1;
-    const subtotal = Math.round(baseSubtotal * mult);
-    // Apply discount
-    const discountAmount = Math.round(subtotal * (state.discount / 100));
-    const subtotalAfterDiscount = subtotal - discountAmount;
-    // Apply VAT
-    const vatAmount = state.includeVAT ? Math.round(subtotalAfterDiscount * 0.1) : 0;
+    const vatAmount = state.includeVAT ? Math.round(baseSubtotal * 0.1) : 0;
     state.results.costs.vat = vatAmount;
-    state.results.costs.yearly = subtotalAfterDiscount + vatAmount;
+    state.results.costs.yearly = baseSubtotal + vatAmount;
     state.results.costs.monthly = Math.floor(state.results.costs.yearly / 12);
 
     // 조건표 패널 업데이트
@@ -183,17 +229,17 @@ function calculate() {
 
 // ---- Condition Panel ----
 function getEffectiveCond(condition) {
-    const isApp   = state.itemToggles.appointment;
+    const isApp = state.itemToggles.appointment;
     const isMaint = state.itemToggles.maintenance;
-    const isInsp  = state.itemToggles.inspection;
+    const isInsp = state.itemToggles.inspection;
 
     return {
-        monthlyAppointment:  isApp   ? (state.condOverride.monthlyAppointment  ?? condition.monthlyAppointment)  : 0,
-        yearlyAppointment:   isApp   ? (state.condOverride.yearlyAppointment   ?? condition.yearlyAppointment)   : 0,
-        yearlyMaintenance:   isMaint ? (state.condOverride.yearlyMaintenance   ?? condition.yearlyMaintenance)   : 0,
-        yearlyInspection:    isInsp  ? (state.condOverride.yearlyInspection    ?? condition.yearlyInspection)    : 0,
-        inspectionWorkers:   isInsp  ? (state.condOverride.inspectionWorkers   ?? condition.inspectionWorkers)   : 0,
-        maintenanceWorkers:  isMaint ? (state.condOverride.maintenanceWorkers  ?? condition.maintenanceWorkers)  : 0,
+        monthlyAppointment: isApp ? (state.condOverride.monthlyAppointment ?? (condition.monthlyAppointment || 0)) : 0,
+        yearlyAppointment: isApp ? (state.condOverride.yearlyAppointment ?? (condition.yearlyAppointment || 0)) : 0,
+        yearlyMaintenance: isMaint ? (state.condOverride.yearlyMaintenance ?? (condition.yearlyMaintenance || 0)) : 0,
+        yearlyInspection: isInsp ? (state.condOverride.yearlyInspection ?? (condition.yearlyInspection || 0)) : 0,
+        inspectionWorkers: isInsp ? (state.condOverride.inspectionWorkers ?? (condition.inspectionWorkers || 0)) : 0,
+        maintenanceWorkers: isMaint ? (state.condOverride.maintenanceWorkers ?? (condition.maintenanceWorkers || 0)) : 0,
     };
 }
 
@@ -218,11 +264,12 @@ function updateConditionPanel(condition) {
 
     const inputs = [
         { id: 'cond-monthly-appointment', val: fmt(Math.round(eff.monthlyAppointment * adjFactor)) },
-        { id: 'cond-yearly-appointment',  val: fmt(Math.round(eff.yearlyAppointment  * adjFactor)) },
-        { id: 'cond-yearly-maintenance',  val: fmt(Math.round(eff.yearlyMaintenance  * adjFactor)) },
-        { id: 'cond-yearly-inspection',   val: fmt(Math.round(eff.yearlyInspection   * adjFactor)) },
-        { id: 'cond-inspection-workers',  val: eff.inspectionWorkers },   // 인원수는 adjFactor 미적용
-        { id: 'cond-maintenance-workers', val: eff.maintenanceWorkers }   // 인원수는 adjFactor 미적용
+        { id: 'cond-yearly-appointment', val: fmt(Math.round(eff.yearlyAppointment * adjFactor)) },
+        { id: 'cond-yearly-maintenance', val: fmt(Math.round(eff.yearlyMaintenance * adjFactor)) },
+        { id: 'cond-yearly-inspection', val: fmt(Math.round(eff.yearlyInspection * adjFactor)) },
+        { id: 'cond-inspection-workers', val: eff.inspectionWorkers },   // 인원수는 adjFactor 미적용
+        { id: 'cond-maintenance-workers', val: eff.maintenanceWorkers },  // 인원수는 adjFactor 미적용
+        { id: 'cond-personnel-discount', val: state.condOverride.personnelDiscount ?? 0 },
     ];
 
     inputs.forEach(item => {
@@ -242,15 +289,34 @@ function updateConditionPanel(condition) {
         }
     });
 
+    // 항목 토글 시각적 동기화 (기계사업부 추가)
+    const toggleItems = ['inspection', 'maintenance', 'appointment'];
+    toggleItems.forEach(item => {
+        const rows = document.querySelectorAll(`.cond-row[data-row-item="${item}"]`);
+        const btn = document.querySelector(`.btn-toggle-item[data-item="${item}"]`);
+        const isActive = state.itemToggles[item];
+
+        rows.forEach(row => {
+            if (isActive) row.classList.remove('excluded-item');
+            else row.classList.add('excluded-item');
+        });
+
+        if (btn) {
+            const icon = btn.querySelector('i');
+            if (isActive) {
+                btn.classList.remove('excluded');
+                if (icon) icon.className = 'fas fa-minus-circle';
+            } else {
+                btn.classList.add('excluded');
+                if (icon) icon.className = 'fas fa-plus-circle';
+            }
+        }
+    });
+
     document.getElementById('cond-discount-display').textContent = state.discount + '%';
 
-    const baseSubtotal = eff.yearlyAppointment + eff.yearlyMaintenance + eff.yearlyInspection;
-    const mult = state.useMultiplier ? state.multiplier : 1;
-    const subtotal = Math.round(baseSubtotal * mult);
-    const discountAmount = Math.round(subtotal * (state.discount / 100));
-    const subtotalAfterDiscount = subtotal - discountAmount;
-    const vatAmount = state.includeVAT ? Math.round(subtotalAfterDiscount * 0.1) : 0;
-    const yearlyTotal = subtotalAfterDiscount + vatAmount;
+    // 기계사업부: 합계는 calculate()에서 확정된 state.results.costs 사용
+    const yearlyTotal = state.results.costs.yearly || 0;
     const monthlyTotal = Math.floor(yearlyTotal / 12);
     document.getElementById('cond-yearly-total').textContent = fmt(yearlyTotal) + '원' + (state.includeVAT ? ' (부가세 포함)' : '');
     document.getElementById('cond-monthly-total').textContent = fmt(monthlyTotal) + '원';
@@ -263,13 +329,13 @@ function updateConditionPanel(condition) {
     const hint = document.getElementById('multiplier-hint');
     if (hint) {
         const showHint = !state.itemToggles.appointment &&
-                         (state.itemToggles.inspection || state.itemToggles.maintenance) &&
-                         !state.useMultiplier;
+            (state.itemToggles.inspection || state.itemToggles.maintenance) &&
+            !state.useMultiplier;
         hint.style.display = showHint ? 'inline' : 'none';
     }
 
     // 수정된 필드 하이라이트
-    ['monthly-appointment', 'yearly-appointment', 'yearly-maintenance', 'yearly-inspection', 'inspection-workers', 'maintenance-workers'].forEach(key => {
+    ['monthly-appointment', 'yearly-appointment', 'yearly-maintenance', 'yearly-inspection', 'inspection-workers', 'maintenance-workers', 'personnel-discount'].forEach(key => {
         const el = document.getElementById('cond-' + key);
         if (!el) return;
         const stateKey = key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -319,11 +385,55 @@ function updateUI() {
     if (!hasArea) return;
 
     document.getElementById('res-grade').textContent = state.results.grade;
-    document.getElementById('res-coef').textContent = hasValidCondition ? state.results.coef.toFixed(2) : '-';
-    document.getElementById('res-workers').textContent = hasValidCondition ? state.results.inspectionWorkers + " 명" : '-';
-    document.getElementById('res-maint-workers').textContent = hasValidCondition ? state.results.maintenanceWorkers + " 명" : '-';
+    const coefEl = document.getElementById('res-coef');
+    if (coefEl) coefEl.textContent = hasValidCondition ? state.results.coef.toFixed(2) : '-';
+    const workersEl = document.getElementById('res-workers');
+    if (workersEl) workersEl.textContent = hasValidCondition ? state.results.inspectionWorkers + " 명" : '-';
+    const maintWorkersEl = document.getElementById('res-maint-workers');
+    if (maintWorkersEl) maintWorkersEl.textContent = hasValidCondition ? state.results.maintenanceWorkers + " 명" : '-';
+    // 기계사업부: 3등급 투입인원
+    const p = state.results.personnel || { senior: 0, high: 0, mid: 0 };
+    const seniorEl = document.getElementById('res-senior');
+    if (seniorEl) seniorEl.textContent = hasValidCondition ? p.senior + ' 명' : '-';
+    const highEl = document.getElementById('res-high');
+    if (highEl) highEl.textContent = hasValidCondition ? p.high + ' 명' : '-';
+    const midEl = document.getElementById('res-mid');
+    if (midEl) midEl.textContent = hasValidCondition ? p.mid + ' 명' : '-';
     document.getElementById('res-yearly').textContent = "₩ " + state.results.costs.yearly.toLocaleString();
     document.getElementById('res-monthly').textContent = "₩ " + state.results.costs.monthly.toLocaleString();
+
+    // 항목별 수량/금액
+    const _costs = state.results.costs;
+    const _tog = state.itemToggles;
+    const _setItem = (freqId, costId, enabled, freq, cost) => {
+        const fEl = document.getElementById(freqId);
+        const cEl = document.getElementById(costId);
+        if (fEl) {
+            fEl.textContent = enabled ? (freq || '-') : '제외';
+            if (enabled) {
+                fEl.classList.add('active');
+                fEl.classList.remove('excluded');
+            } else {
+                fEl.classList.add('excluded');
+                fEl.classList.remove('active');
+            }
+        }
+        if (cEl) {
+            cEl.textContent = enabled ? ('₩ ' + cost.toLocaleString()) : '-';
+            cEl.style.color = enabled ? '#111827' : '#9ca3af';
+        }
+    };
+    _setItem('res-insp-freq', 'res-insp-cost', _tog.inspection, state.inspectionFrequency, _costs.inspection);
+    _setItem('res-maint-freq', 'res-maint-cost', _tog.maintenance, state.maintenanceFrequency, _costs.maintenance);
+    _setItem('res-app-freq', 'res-app-cost', _tog.appointment, state.appointmentFrequency, _costs.appointment);
+
+    // 부가세 배지
+    const vatBadge = document.getElementById('res-vat-badge');
+    if (vatBadge) {
+        vatBadge.textContent = state.includeVAT ? '부가세 포함' : '부가세 별도';
+        vatBadge.style.background = '#fff';
+        vatBadge.style.color = state.includeVAT ? 'var(--toss-blue)' : '#6b7280';
+    }
 
     renderTabs();
 }
@@ -332,7 +442,7 @@ function renderTabs() {
     const subtotal = state.results.costs.inspection + state.results.costs.maintenance + state.results.costs.appointment;
 
     const adjFactor = getAdjFactor();
-    const adjInspection  = state.itemToggles.inspection  ? Math.round(state.results.costs.inspection  * adjFactor) : 0;
+    const adjInspection = state.itemToggles.inspection ? Math.round(state.results.costs.inspection * adjFactor) : 0;
     const adjMaintenance = state.itemToggles.maintenance ? Math.round(state.results.costs.maintenance * adjFactor) : 0;
     const adjAppointment = state.itemToggles.appointment ? Math.round(state.results.costs.appointment * adjFactor) : 0;
 
@@ -341,9 +451,9 @@ function renderTabs() {
         : '';
 
     // CUSTOMIZE(변경 4): 항목명 하드코딩을 DIVISION_CONFIG.items[].label 로 교체
-    const inspItem  = DIVISION_CONFIG.items.find(i => i.id === 'inspection')  || { label: '성능점검' };
+    const inspItem = DIVISION_CONFIG.items.find(i => i.id === 'inspection') || { label: '성능점검' };
     const maintItem = DIVISION_CONFIG.items.find(i => i.id === 'maintenance') || { label: '유지점검' };
-    const appItem   = DIVISION_CONFIG.items.find(i => i.id === 'appointment') || { label: '위탁선임' };
+    const appItem = DIVISION_CONFIG.items.find(i => i.id === 'appointment') || { label: '위탁선임' };
 
     document.getElementById('tbl-q-total').innerHTML = `
         <tr><td>대상물 (고객명)</td><td>${state.customerName || '-'}</td><td></td></tr>
@@ -358,14 +468,14 @@ function renderTabs() {
         <tr style="font-weight:600"><td>월 납부액</td><td>₩ ${state.results.costs.monthly.toLocaleString()}</td><td>÷12</td></tr>
     `;
 
-    // Tab 2: Inspection
-    const inspB = calcLaborBreakdown(state.results.inspectionWorkers, state.results.grade);
+    // Tab 2: 성능점검 — 기계사업부 3등급 breakdown 사용
+    const inspB = state.results.inspBreakdown || calcLaborBreakdown(state.results.inspectionWorkers, state.results.grade);
     document.getElementById('tbl-q-inspection').innerHTML =
         inspB.rows.filter(r => r.workers > 0).map(r => `
         <tr style="font-weight:600; color:var(--toss-text-main);">
-            <td>${r.grade} 정보통신기술자</td>
-            <td>${r.workers}명 × ₩ ${r.wage.toLocaleString()}</td>
-            <td>₩ ${r.amount.toLocaleString()}</td>
+            <td>${r.grade} 기계기술자</td>
+            <td>${r.workers}명 × ₩ ${Number(r.wage).toLocaleString()}</td>
+            <td>₩ ${Number(r.amount).toLocaleString()}</td>
         </tr>`).join('') + `
         <tr style="border-top:1px solid var(--toss-border); font-weight:700;">
             <td>직접인건비 소계</td><td></td><td>₩ ${inspB.labor.toLocaleString()}</td>
@@ -376,23 +486,18 @@ function renderTabs() {
         <tr style="font-weight:700; color:var(--toss-blue)">
             <td>산출 합계</td><td></td><td>₩ ${inspB.total.toLocaleString()}</td>
         </tr>
-        <tr style="color:${adjInspection - inspB.total >= 0 ? 'var(--toss-green)' : 'var(--toss-red)'}">
-            <td>조정 금액</td>
-            <td>목표금액 − 산출합계</td>
-            <td>${adjInspection - inspB.total >= 0 ? '+' : ''}₩ ${(adjInspection - inspB.total).toLocaleString()}</td>
-        </tr>
         <tr style="font-weight:700; border-top:1px solid var(--toss-border); color:var(--toss-text-main);">
-            <td>최종 합계 (목표금액)</td><td>견적 조건표 적용</td><td>₩ ${adjInspection.toLocaleString()}</td>
+            <td>최종 합계 (ROUNDDOWN 적용)</td><td></td><td>₩ ${adjInspection.toLocaleString()}</td>
         </tr>`;
 
-    // Tab 3: Maintenance
-    const maintB = calcLaborBreakdown(state.results.maintenanceWorkers, state.results.grade);
+    // Tab 3: 유지점검 — 특급 없음
+    const maintB = state.results.maintBreakdown || calcLaborBreakdown(state.results.maintenanceWorkers, state.results.grade);
     document.getElementById('tbl-q-maintenance').innerHTML =
         maintB.rows.filter(r => r.workers > 0).map(r => `
         <tr style="font-weight:600; color:var(--toss-text-main);">
-            <td>${r.grade} 정보통신기술자</td>
-            <td>${r.workers}명 × ₩ ${r.wage.toLocaleString()}</td>
-            <td>₩ ${r.amount.toLocaleString()}</td>
+            <td>${r.grade} 기계기술자</td>
+            <td>${r.workers}명 × ₩ ${Number(r.wage).toLocaleString()}</td>
+            <td>₩ ${Number(r.amount).toLocaleString()}</td>
         </tr>`).join('') + `
         <tr style="border-top:1px solid var(--toss-border); font-weight:700;">
             <td>직접인건비 소계</td><td></td><td>₩ ${maintB.labor.toLocaleString()}</td>
@@ -403,13 +508,8 @@ function renderTabs() {
         <tr style="font-weight:700; color:var(--toss-blue)">
             <td>산출 합계</td><td></td><td>₩ ${maintB.total.toLocaleString()}</td>
         </tr>
-        <tr style="color:${adjMaintenance - maintB.total >= 0 ? 'var(--toss-green)' : 'var(--toss-red)'}">
-            <td>조정 금액</td>
-            <td>목표금액 − 산출합계</td>
-            <td>${adjMaintenance - maintB.total >= 0 ? '+' : ''}₩ ${(adjMaintenance - maintB.total).toLocaleString()}</td>
-        </tr>
         <tr style="font-weight:700; border-top:1px solid var(--toss-border); color:var(--toss-text-main);">
-            <td>최종 합계 (목표금액)</td><td>견적 조건표 적용</td><td>₩ ${adjMaintenance.toLocaleString()}</td>
+            <td>최종 합계 (ROUNDDOWN 적용)</td><td></td><td>₩ ${adjMaintenance.toLocaleString()}</td>
         </tr>`;
 
     // Tab 4: Appointment
@@ -478,12 +578,12 @@ function renderTabs() {
             // CUSTOMIZE(변경 4): 항목명을 DIVISION_CONFIG.items[].label 로 교체
             const COND_ROWS = [
                 { label: '등급', fn: c => `<span style="font-weight:700;color:${GRADE_STYLES[c.grade]?.color || 'var(--toss-text-main)'}">${c.grade}</span>` },
-                { label: `${inspItem.label} (연)`,  fn: c => '₩ ' + fmt(c.yearlyInspection) },
-                { label: `${inspItem.label} 인력`,  fn: c => c.inspectionWorkers + '명' },
+                { label: `${inspItem.label} (연)`, fn: c => '₩ ' + fmt(c.yearlyInspection) },
+                { label: `${inspItem.label} 인력`, fn: c => c.inspectionWorkers + '명' },
                 { label: `${maintItem.label} (연)`, fn: c => '₩ ' + fmt(c.yearlyMaintenance) },
                 { label: `${maintItem.label} 인력`, fn: c => c.maintenanceWorkers + '명' },
-                { label: `${appItem.label} (월)`,   fn: c => '₩ ' + fmt(c.monthlyAppointment) },
-                { label: `${appItem.label} (연)`,   fn: c => '₩ ' + fmt(c.yearlyAppointment) },
+                { label: `${appItem.label} (월)`, fn: c => '₩ ' + fmt(c.monthlyAppointment) },
+                { label: `${appItem.label} (연)`, fn: c => '₩ ' + fmt(c.yearlyAppointment) },
             ];
 
             const thCells = QUOTATION_CONDITIONS.map(c => {
@@ -571,40 +671,95 @@ async function fetchBuildingInfo() {
         const target = await window.wkCommon.fetchBuildingRegister(addrInfo);
 
         const sumMainArea = parseFloat(target.totArea || 0);
+        const hhldCnt = target.hhldCnt || 0;
+        const purposeText = target.mainPurpsCdNm || '';
         const result = {
             '연면적': sumMainArea.toLocaleString(undefined, { minimumFractionDigits: 2 }),
             '부속건축물면적': '0.00',
             '총연면적': sumMainArea.toLocaleString(undefined, { minimumFractionDigits: 2 }),
-            '주용도': target.mainPurpsCdNm || '-',
-            '주용도_분포': target.mainPurpsCdNm || '-',
+            '주용도': purposeText || '-',
+            '세대수': hhldCnt > 0 ? hhldCnt.toLocaleString() + ' 세대' : '-',
+            '주용도_분포': purposeText || '-',
             '대지면적': target.platArea || '-',
             '건축면적': target.archArea || '-',
             '사용승인일': target.useAprDay || '-',
             '건축물명': target.bldNm || '-',
             '_rawMainArea': sumMainArea,
-            '_rawPurpose': target.mainPurpsCdNm
+            '_rawPurpose': purposeText,
+            '_hhldCnt': hhldCnt,
         };
         _lastBuildingResult = result;
 
-        const displayKeys = ['총연면적', '연면적', '부속건축물면적', '주용도', '대지면적', '건축면적', '사용승인일', '건축물명'];
-        contentEl.innerHTML = displayKeys.map(k => `
+        // 창고시설 여부
+        const isWarehouse = purposeText.includes('창고');
+
+        // 예상 등급 계산
+        const previewGrade = calcFloorGrade(sumMainArea, purposeText, hhldCnt);
+        const isApt = purposeText.includes('공동주택') || purposeText.includes('아파트');
+        const isUnderThreshold = isApt && hhldCnt > 0 && hhldCnt < 300;
+        const gradeBasis = isApt && hhldCnt > 0
+            ? `세대수 기준 / ${hhldCnt.toLocaleString()}세대`
+            : `연면적 기준 / ${sumMainArea.toLocaleString(undefined, { maximumFractionDigits: 0 })}㎡`;
+        const gradeStyle = (GRADE_STYLES && previewGrade && GRADE_STYLES[previewGrade])
+            ? GRADE_STYLES[previewGrade]
+            : { color: '#6b7280' };
+
+        const displayKeys = ['총연면적', '연면적', '부속건축물면적', '주용도', '세대수', '대지면적', '건축면적', '사용승인일', '건축물명'];
+        contentEl.innerHTML = (isWarehouse ? `
+            <div style="grid-column:1/-1; background:#fef2f2; border:2px solid #fca5a5; border-radius:8px;
+                        padding:0.75rem 1rem; display:flex; align-items:center; gap:0.5rem;">
+                <i class="fas fa-ban" style="color:#dc2626; font-size:1.1rem; flex-shrink:0;"></i>
+                <div>
+                    <div style="font-weight:700; color:#b91c1c; font-size:0.95rem;">창고시설 — 견적 작성 불가</div>
+                    <div style="font-size:0.8rem; color:#991b1b; margin-top:2px;">창고시설은 기계사업부 견적 작성 대상이 아닙니다.</div>
+                </div>
+            </div>
+        ` : '') + displayKeys.map(k => `
             <div style="background:white; border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.8rem;">
                 <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:2px;">${k}</div>
                 <div style="font-weight:700; font-size:0.9rem; color:var(--text-primary)">${result[k] || '-'}</div>
             </div>
-        `).join('') + `
+        `).join('') + (!isWarehouse ? (previewGrade ? `
+            <div style="background:#f0f9ff; border:1px solid ${gradeStyle.color}40; border-radius:6px;
+                        padding:0.6rem 0.8rem; grid-column:1/-1;">
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:4px;">예상 등급 (조회 기준)</div>
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                    <span style="font-weight:800; font-size:1.05rem; color:${gradeStyle.color};">${previewGrade}</span>
+                    <span style="font-size:0.8rem; color:#6b7280;">${gradeBasis}</span>
+                </div>
+            </div>
+        ` : isUnderThreshold ? `
+            <div style="background:#fefce8; border:1px solid #fde047; border-radius:6px;
+                        padding:0.6rem 0.8rem; grid-column:1/-1;">
+                <div style="font-size:0.7rem; color:#a16207; margin-bottom:4px;">예상 등급 (조회 기준)</div>
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                    <span style="font-weight:800; font-size:1.05rem; color:#92400e;">해당 없음</span>
+                    <span style="font-size:0.8rem; color:#78350f;">300세대 미만 — 위탁선임 대상 아님</span>
+                </div>
+            </div>
+        ` : '') : '') + `
             <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; padding:0.6rem 0.8rem; grid-column:1/-1;">
                 <div style="font-size:0.7rem; color:#3b82f6; margin-bottom:2px;">주용도 분포 (주건축물 기준)</div>
                 <div style="font-weight:600; font-size:0.85rem; color:#1d4ed8">${result['주용도_분포'] || '-'}</div>
             </div>
         `;
 
+        // 창고시설이면 "데이터 적용" 버튼 비활성
+        const applyBtn = document.getElementById('btn-apply-building');
+        if (applyBtn) {
+            applyBtn.disabled = isWarehouse;
+            applyBtn.style.opacity = isWarehouse ? '0.4' : '';
+            applyBtn.style.cursor = isWarehouse ? 'not-allowed' : '';
+        }
+
         panelEl.style.display = 'block';
-        statusEl.style.background = '#f0fdf4';
-        statusEl.style.color = '#15803d';
+        statusEl.style.background = isWarehouse ? '#fef2f2' : '#f0fdf4';
+        statusEl.style.color = isWarehouse ? '#b91c1c' : '#15803d';
         statusEl.style.textAlign = 'center';
-        statusEl.innerHTML = '<span class="status-msg-pc">건축물대장 조회 성공! "이 값으로 적용" 버튼으로 값을 입력하세요.</span>' +
-                             '<span class="status-msg-mobile">건축물대장 조회 성공!<br>"이 값으로 적용" 버튼으로<br>값을 입력하세요.</span>';
+        statusEl.innerHTML = isWarehouse
+            ? '창고시설은 견적 작성 대상이 아닙니다.'
+            : '<span class="status-msg-pc">건축물대장 조회 성공! "이 값으로 적용" 버튼으로 값을 입력하세요.</span>' +
+            '<span class="status-msg-mobile">건축물대장 조회 성공!<br>"이 값으로 적용" 버튼으로<br>값을 입력하세요.</span>';
     } catch (err) {
         statusEl.style.background = '#fef2f2';
         statusEl.style.color = '#b91c1c';
@@ -613,6 +768,43 @@ async function fetchBuildingInfo() {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-search"></i> 건축물대장 조회';
     }
+}
+
+// ---- 기계사업부: 설비 수량 및 세대수 이벤트 ----
+const equipmentInputsEl = document.getElementById('equipment-inputs');
+if (equipmentInputsEl) {
+    // 직접 입력
+    equipmentInputsEl.addEventListener('input', e => {
+        const key = e.target.dataset.equipment;
+        if (key) {
+            state.equipmentQty[key] = Number(e.target.value) || 0;
+            calculate();
+        }
+    });
+    // −/+ 버튼 클릭
+    equipmentInputsEl.addEventListener('click', e => {
+        const minusKey = e.target.dataset.eqMinus;
+        const plusKey = e.target.dataset.eqPlus;
+        const key = minusKey || plusKey;
+        if (!key) return;
+        const input = equipmentInputsEl.querySelector(`input[data-equipment="${CSS.escape(key)}"]`);
+        if (!input) return;
+        let val = Number(input.value) || 0;
+        if (minusKey) val = Math.max(0, val - 1);
+        if (plusKey) val = val + 1;
+        input.value = val;
+        state.equipmentQty[key] = val;
+        calculate();
+    });
+}
+
+const householdCountEl = document.getElementById('household-count');
+if (householdCountEl) {
+    householdCountEl.addEventListener('input', e => {
+        state.세대수 = Number(e.target.value) || 0;
+        updateGradeBadge(state.floorArea, state.purpose, state.세대수);
+        calculate();
+    });
 }
 
 // ---- Kakao Address Search ----
@@ -645,7 +837,7 @@ document.getElementById('customer-name').addEventListener('input', (e) => {
 
 document.getElementById('floor-area').addEventListener('input', (e) => {
     state.floorArea = parseFloat(e.target.value) || 0;
-    updateGradeBadge(state.floorArea);
+    updateGradeBadge(state.floorArea, state.purpose, state.세대수);
     calculate();
 });
 
@@ -659,6 +851,8 @@ document.getElementById('btn-fetch-building').addEventListener('click', fetchBui
 
 document.getElementById('btn-apply-building').addEventListener('click', () => {
     if (!_lastBuildingResult) return;
+    // 창고시설 적용 차단
+    if ((_lastBuildingResult['_rawPurpose'] || '').includes('창고')) return;
     const rawArea = _lastBuildingResult['_rawMainArea'];
     const purpose = _lastBuildingResult['_rawPurpose'];
     const bldName = _lastBuildingResult['건축물명'];
@@ -680,6 +874,15 @@ document.getElementById('btn-apply-building').addEventListener('click', () => {
         document.getElementById('purpose').value = topPurpose;
         state.purpose = topPurpose;
     }
+    // 세대수 (hhldCnt) 반영
+    const hhldCnt = _lastBuildingResult['_hhldCnt'] || 0;
+    if (hhldCnt > 0) {
+        state.세대수 = hhldCnt;
+        const hhldEl = document.getElementById('household-count');
+        if (hhldEl) hhldEl.value = hhldCnt;
+    }
+    // 공동주택 여부에 따라 세대수 섹션 표시
+    _toggleHouseholdSection(topPurpose || state.purpose);
     if (bldName && bldName !== '-' && !state.customerName) {
         document.getElementById('customer-name').value = bldName;
         state.customerName = bldName;
@@ -696,8 +899,32 @@ document.getElementById('btn-apply-building').addEventListener('click', () => {
 });
 
 
+// 공동주택 여부에 따라 세대수 섹션 표시/숨김
+function _toggleHouseholdSection(purpose) {
+    const isApt = (purpose || '').includes('공동주택') || (purpose || '').includes('아파트');
+    const hhldGroup = document.getElementById('household-group');
+    if (hhldGroup) hhldGroup.style.display = isApt ? 'block' : 'none';
+}
+
 document.getElementById('purpose').addEventListener('input', (e) => {
     state.purpose = e.target.value;
+    _toggleHouseholdSection(state.purpose);
+
+    // 학교: 위탁선임 월 단가 65만원 자동 설정
+    if (state.purpose.includes('학교')) {
+        if (state.condOverride.monthlyAppointment == null) {
+            state.condOverride.monthlyAppointment = 650000;
+            state.condOverride.yearlyAppointment = 7800000;
+        }
+    } else {
+        // 학교 preset(65만원)에서 다른 용도로 변경 시 자동 설정값 제거
+        if (state.condOverride.monthlyAppointment === 650000) {
+            delete state.condOverride.monthlyAppointment;
+            delete state.condOverride.yearlyAppointment;
+        }
+    }
+
+    calculate();
 });
 
 document.getElementById('use-apr-day').addEventListener('input', (e) => {
@@ -865,11 +1092,12 @@ document.getElementById('btn-multiplier-minus').addEventListener('click', () => 
 // ---- Condition Table Inputs ----
 const COND_INPUT_MAP = {
     'cond-monthly-appointment': 'monthlyAppointment',
-    'cond-yearly-appointment':  'yearlyAppointment',
-    'cond-yearly-maintenance':  'yearlyMaintenance',
-    'cond-yearly-inspection':   'yearlyInspection',
-    'cond-inspection-workers':  'inspectionWorkers',
+    'cond-yearly-appointment': 'yearlyAppointment',
+    'cond-yearly-maintenance': 'yearlyMaintenance',
+    'cond-yearly-inspection': 'yearlyInspection',
+    'cond-inspection-workers': 'inspectionWorkers',
     'cond-maintenance-workers': 'maintenanceWorkers',
+    'cond-personnel-discount': 'personnelDiscount',  // % 값 그대로 저장, adjFactor 역산 없음
 };
 const COST_FIELDS = new Set(['cond-monthly-appointment', 'cond-yearly-appointment', 'cond-yearly-maintenance', 'cond-yearly-inspection']);
 
@@ -1009,16 +1237,15 @@ function formatKoreanDate(dateStr) {
 // CUSTOMIZE(변경 3): generateMapping()은 DIVISION_CONFIG.generateExcelMapping()에 위임
 function generateMapping() {
     const adjFactor = getAdjFactor();
-    const costs = state.results.costs;
-    const inspB = calcLaborBreakdown(state.results.inspectionWorkers, state.results.grade);
-    const maintB = calcLaborBreakdown(state.results.maintenanceWorkers, state.results.grade);
-    // 선임은 위탁선임 toggle=true이면 1명
-    const appWorkers = state.itemToggles.appointment ? 1 : 0;
-    const appB = calcLaborBreakdown(appWorkers, state.results.grade, APPOINTMENT_WAGES);
-    // 연간 인건비 = 1명 × 12개월 × 선임 노임단가
-    const appAnnualLabor = appWorkers * 12 * (APPOINTMENT_WAGES[state.results.grade] || 0);
-    const laborData = { inspB, maintB, appB, appAnnualLabor, appWorkers };
-    return DIVISION_CONFIG.generateExcelMapping(state, costs, adjFactor, laborData);
+    const costs = { ...state.results.costs, checkQty: state.results.checkQty };
+    // 기계사업부: inspBreakdown/maintBreakdown은 state.results에서 직접 사용
+    const inspB = state.results.inspBreakdown || calcLaborBreakdown(state.results.inspectionWorkers, state.results.grade);
+    const maintB = state.results.maintBreakdown || calcLaborBreakdown(state.results.maintenanceWorkers, state.results.grade);
+    const laborData = { inspB, maintB };
+    const mapping = DIVISION_CONFIG.generateExcelMapping(state, costs, adjFactor, laborData);
+    // outputSheets 프로퍼티 추가 (PDF 생성 시 시트 지정)
+    mapping.outputSheets = DIVISION_CONFIG.outputSheets || Object.keys(mapping);
+    return mapping;
 }
 
 // ---- 상태 표시 헬퍼 ----
@@ -1026,9 +1253,9 @@ function showStatusBar(msg, type) {
     const bar = document.getElementById('sheet-status-bar');
     if (!bar) return;
     const colors = {
-        info:    { bg: '#eff6ff', color: '#1d4ed8' },
+        info: { bg: '#eff6ff', color: '#1d4ed8' },
         success: { bg: '#f0fdf4', color: '#15803d' },
-        error:   { bg: '#fef2f2', color: '#b91c1c' },
+        error: { bg: '#fef2f2', color: '#b91c1c' },
         warning: { bg: '#fffbeb', color: '#b45309' }
     };
     const c = colors[type] || colors.info;
@@ -1051,8 +1278,8 @@ document.getElementById('btn-save-pdf').addEventListener('click', async () => {
     const mapping = generateMapping();
     const btn = document.getElementById('btn-save-pdf');
 
-    if (!state.floorArea || state.floorArea < 5000) {
-        showStatusBar('연면적을 먼저 입력해주세요. (5,000㎡ 이상)', 'warning');
+    if (!state.floorArea || state.floorArea < 1) {
+        showStatusBar('연면적을 먼저 입력해주세요.', 'warning');
         return;
     }
 
@@ -1103,6 +1330,8 @@ document.getElementById('btn-save-pdf').addEventListener('click', async () => {
             managerName: state.manager || '',
             managerPosition: state.managerPosition || ''
         };
+        pdfBody.templateName = DIVISION_CONFIG.excelTemplate;
+        pdfBody.outputSheets = mapping.outputSheets;
 
         const pdfRes = await fetch(PDF_SERVER_URL, {
             method: 'POST',
@@ -1187,7 +1416,205 @@ if (adminTrigger) {
             statusEl.textContent = '연결 실패 (Disconnected)';
             statusEl.style.color = '#b91c1c';
         }
+        renderAdminDebug();
     });
+}
+
+function renderAdminDebug() {
+    const tbody = document.getElementById('tbl-admin-debug-body');
+    const summary = document.getElementById('admin-debug-summary');
+    if (!tbody || !summary) return;
+
+    const breakdown = state.results.personnelBreakdown || [];
+    const raw = state.results.rawPersonnel || { sRaw: 0, hRaw: 0, mRaw: 0 };
+
+    // 그룹화 (수식에 맞게: 계획/시스템 검토 vs 나머지)
+    const reviewItems = ['계획검토', '시스템검토'];
+    let reviewS = 0, reviewH = 0, reviewM = 0;
+    let baseS = 0, baseH = 0, baseM = 0;
+
+    const rowsHtml = breakdown.map(item => {
+        const isReview = reviewItems.includes(item.name);
+        if (isReview) {
+            reviewS += item.sContribution;
+            reviewH += item.hContribution;
+            reviewM += item.mContribution;
+        } else {
+            baseS += item.sContribution;
+            baseH += item.hContribution;
+            baseM += item.mContribution;
+        }
+
+        return `
+            <tr style="${isReview ? 'background:#f0f9ff;' : ''}">
+                <td style="font-weight:600; white-space:nowrap;">${isReview ? '<span>[검토]</span> ' : ''}${item.name}</td>
+                <td style="text-align:center;">${item.inputQty}</td>
+                <td style="text-align:center; color:#64748b;">${(item.rate * 100).toFixed(0)}%</td>
+                <td style="text-align:center;">${item.checkQty}</td>
+                <td style="text-align:right; font-variant-numeric:tabular-nums; color:#4f46e5;">${item.sContribution.toFixed(3)}</td>
+                <td style="text-align:right; font-variant-numeric:tabular-nums; color:#059669;">${item.hContribution.toFixed(3)}</td>
+                <td style="text-align:right; font-variant-numeric:tabular-nums; color:#d97706;">${item.mContribution.toFixed(3)}</td>
+            </tr>
+        `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+
+    const inspB = state.results.inspBreakdown || { labor: 0, expense: 0, general: 0, tech: 0, total: 0, rows: [{ amount: 0 }, { amount: 0 }, { amount: 0 }] };
+    const maintB = state.results.maintBreakdown || { labor: 0, expense: 0, general: 0, tech: 0, total: 0, rows: [{ amount: 0 }, { amount: 0 }, { amount: 0 }] };
+    const WAGES = window.CONSTANTS.GRADE_WAGES;
+
+    summary.innerHTML = `
+        <!-- ═══ [A] 성능 점검 섹션 ═══ -->
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-bottom:0.5rem;">
+            <div style="grid-column:1/-1; display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; background:linear-gradient(90deg,#eff6ff,transparent); border-left:3px solid var(--toss-blue); border-radius:0 8px 8px 0;">
+                <i class="fas fa-search" style="color:var(--toss-blue);"></i>
+                <span style="font-weight:700; font-size:0.95rem; color:var(--toss-blue);">성능 점검</span>
+            </div>
+
+            <!-- A-1: 성능점검 인원 산출 요약 -->
+            <div style="background:#fff; padding:1.2rem; border:1px solid #e2e8f0; border-radius:16px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                <div style="font-weight:700; font-size:1rem; margin-bottom:1rem; color:#1e293b; border-bottom:1px solid #f1f5f9; padding-bottom:0.75rem;">
+                    <i class="fas fa-users-cog" style="margin-right:0.5rem; color:var(--toss-blue);"></i>성능점검 인원 산출 요약
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.7rem; font-size:0.85rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:#64748b;">① 설비 부하 (기본 설비)</span>
+                        <span style="font-variant-numeric:tabular-nums; font-weight:600; color:#334155;">S: ${baseS.toFixed(3)} | H: ${baseH.toFixed(3)} | M: ${baseM.toFixed(3)}</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:#64748b;">② 검토 항목 (계획+시스템)</span>
+                        <span style="font-variant-numeric:tabular-nums; font-weight:600; color:var(--toss-blue);">S: ${reviewS.toFixed(3)} | H: ${reviewH.toFixed(3)} | M: ${reviewM.toFixed(3)}</span>
+                    </div>
+                    <div style="height:1px; background:#f1f5f9;"></div>
+                    <div style="background:#fdfcf6; padding:0.6rem; border-radius:8px; font-size:0.75rem; color:#854d0e; border:1px solid #fef3c7;">
+                        <div style="font-weight:700; margin-bottom:0.25rem; color:#92400e;">인원 할인율 적용 (${state.condOverride.personnelDiscount || 0}% 할인)</div>
+                        <div style="font-variant-numeric:tabular-nums; line-height:1.5;">
+                            특급: ${raw.sRaw.toFixed(3)} × ${(1-(state.condOverride.personnelDiscount||0)/100).toFixed(2)} = ${(raw.sRaw*(1-(state.condOverride.personnelDiscount||0)/100)).toFixed(3)} → <b>${state.results.personnel.senior}명</b><br>
+                            고급: ${raw.hRaw.toFixed(3)} × ${(1-(state.condOverride.personnelDiscount||0)/100).toFixed(2)} = ${(raw.hRaw*(1-(state.condOverride.personnelDiscount||0)/100)).toFixed(3)} → <b>${state.results.personnel.high}명</b><br>
+                            중급: ${raw.mRaw.toFixed(3)} × ${(1-(state.condOverride.personnelDiscount||0)/100).toFixed(2)} = ${(raw.mRaw*(1-(state.condOverride.personnelDiscount||0)/100)).toFixed(3)} → <b>${state.results.personnel.mid}명</b>
+                        </div>
+                    </div>
+                    <div style="background:linear-gradient(135deg,#f8fafc,#f1f5f9); padding:0.8rem; border-radius:12px; border:1px solid #e2e8f0; text-align:center; font-size:1rem;">
+                        <span style="color:#4f46e5; font-weight:800;">특급 ${state.results.personnel.senior}</span> /
+                        <span style="color:#059669; font-weight:800;">고급 ${state.results.personnel.high}</span> /
+                        <span style="color:#d97706; font-weight:800;">중급 ${state.results.personnel.mid}</span> 명
+                    </div>
+                </div>
+            </div>
+
+            <!-- A-2: 성능점검 비용 산출 -->
+            <div style="background:#fff; padding:1.2rem; border:1px solid #e2e8f0; border-radius:16px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                <div style="font-weight:700; font-size:1rem; margin-bottom:0.75rem; color:#1e293b; border-bottom:1px solid #f1f5f9; padding-bottom:0.75rem;">
+                    <i class="fas fa-won-sign" style="margin-right:0.5rem; color:#059669;"></i>성능점검 비용 산출
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.6rem; font-size:0.85rem;">
+                    <div style="background:#f8fafc; padding:0.6rem; border-radius:8px; font-size:0.75rem; color:#475569; border:1px solid #f1f5f9; line-height:1.7;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>특급 (${state.results.personnel.senior}인 × ${WAGES['특급'].toLocaleString()}원)</span>
+                            <span style="font-weight:600;">=${inspB.rows[0].amount.toLocaleString()}</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>고급 (${state.results.personnel.high}인 × ${WAGES['고급'].toLocaleString()}원)</span>
+                            <span style="font-weight:600;">=${inspB.rows[1].amount.toLocaleString()}</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>중급 (${state.results.personnel.mid}인 × ${WAGES['중급'].toLocaleString()}원)</span>
+                            <span style="font-weight:600;">=${inspB.rows[2].amount.toLocaleString()}</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-weight:700; color:#1e293b;">직접인건비 합계</span>
+                        <span style="font-weight:800; font-size:0.95rem;">${inspB.labor.toLocaleString()}원</span>
+                    </div>
+                    <div style="font-size:0.72rem; color:#64748b;">경비(10%): ${inspB.expense.toLocaleString()} | 제경비(110%): ${inspB.general.toLocaleString()} | 기술료(20%): ${inspB.tech.toLocaleString()}</div>
+                    <div style="background:var(--toss-blue-bg); padding:0.6rem 0.8rem; border-radius:10px; border:1px solid var(--toss-blue-light);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.75rem; color:var(--toss-blue); font-weight:700;">성능점검 합계 (10만 절사)</span>
+                            <span style="font-size:1rem; font-weight:900; color:var(--toss-blue);">${state.results.costs.inspection.toLocaleString()}원</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ [B] 유지 점검 섹션 ═══ -->
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-top:1rem; padding-top:1rem; border-top:2px dashed #fde68a;">
+            <div style="grid-column:1/-1; display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; background:linear-gradient(90deg,#fff7ed,transparent); border-left:3px solid #d97706; border-radius:0 8px 8px 0;">
+                <i class="fas fa-tools" style="color:#d97706;"></i>
+                <span style="font-weight:700; font-size:0.95rem; color:#d97706;">유지 점검</span>
+                <span style="font-size:0.72rem; color:#92400e; background:#fef3c7; padding:1px 8px; border-radius:999px; margin-left:0.25rem;">특급 제외</span>
+            </div>
+
+            <!-- B-1: 유지점검 인원 산출 요약 -->
+            <div style="background:#fff; padding:1.2rem; border:1px solid #fde68a; border-radius:16px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                <div style="font-weight:700; font-size:1rem; margin-bottom:1rem; color:#1e293b; border-bottom:1px solid #fef9c3; padding-bottom:0.75rem;">
+                    <i class="fas fa-users-cog" style="margin-right:0.5rem; color:#d97706;"></i>유지점검 인원 산출 요약
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.7rem; font-size:0.85rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:#64748b;">고급+중급 부하 (성능점검 동일)</span>
+                        <span style="font-variant-numeric:tabular-nums; font-weight:600; color:#334155; font-size:0.8rem;">H: ${(baseH+reviewH).toFixed(3)} | M: ${(baseM+reviewM).toFixed(3)}</span>
+                    </div>
+                    <div style="height:1px; background:#fef9c3;"></div>
+                    <div style="background:#fdfcf6; padding:0.6rem; border-radius:8px; font-size:0.75rem; color:#92400e; border:1px solid #fef3c7;">
+                        <div style="font-weight:700; margin-bottom:0.25rem;">할인율 ${state.condOverride.personnelDiscount || 0}% 적용 (특급 미포함)</div>
+                        <div style="font-variant-numeric:tabular-nums; line-height:1.5;">
+                            특급: <span style="text-decoration:line-through; color:#94a3b8;">제외</span> → <b>0명</b><br>
+                            고급: ${raw.hRaw.toFixed(3)} × ${(1-(state.condOverride.personnelDiscount||0)/100).toFixed(2)} → <b>${state.results.personnel.high}명</b><br>
+                            중급: ${raw.mRaw.toFixed(3)} × ${(1-(state.condOverride.personnelDiscount||0)/100).toFixed(2)} → <b>${state.results.personnel.mid}명</b>
+                        </div>
+                    </div>
+                    <div style="background:linear-gradient(135deg,#fffbeb,#fef9c3); padding:0.65rem; border-radius:10px; border:1px solid #fde68a; text-align:center; font-size:0.9rem;">
+                        <span style="color:#94a3b8; font-weight:600; text-decoration:line-through; font-size:0.8rem;">특급 0</span> /
+                        <span style="color:#059669; font-weight:800;">고급 ${state.results.personnel.high}</span> /
+                        <span style="color:#d97706; font-weight:800;">중급 ${state.results.personnel.mid}</span> 명
+                    </div>
+                </div>
+            </div>
+
+            <!-- B-2: 유지점검 비용 산출 -->
+            <div style="background:#fff; padding:1.2rem; border:1px solid #fde68a; border-radius:16px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                <div style="font-weight:700; font-size:1rem; margin-bottom:0.75rem; color:#1e293b; border-bottom:1px solid #fef9c3; padding-bottom:0.75rem;">
+                    <i class="fas fa-won-sign" style="margin-right:0.5rem; color:#d97706;"></i>유지점검 비용 산출
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.5rem; font-size:0.85rem;">
+                    <div style="background:#fffcf9; padding:0.6rem; border-radius:8px; font-size:0.75rem; color:#475569; border:1px solid #fed7aa; line-height:1.7;">
+                        <div style="display:flex; justify-content:space-between; color:#94a3b8;">
+                            <span>특급 (제외)</span><span style="font-weight:600;">0원</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>고급 (${state.results.personnel.high}인 × ${WAGES['고급'].toLocaleString()}원)</span>
+                            <span style="font-weight:600;">${maintB.rows[1].amount.toLocaleString()}</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>중급 (${state.results.personnel.mid}인 × ${WAGES['중급'].toLocaleString()}원)</span>
+                            <span style="font-weight:600;">${maintB.rows[2].amount.toLocaleString()}</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-weight:700; color:#1e293b;">직접인건비</span>
+                        <span style="font-weight:800;">${maintB.labor.toLocaleString()}원</span>
+                    </div>
+                    <div style="font-size:0.72rem; color:#64748b;">경비(10%): ${maintB.expense.toLocaleString()} | 제경비(110%): ${maintB.general.toLocaleString()} | 기술료(20%): ${maintB.tech.toLocaleString()}</div>
+                    <div style="background:#fff7ed; padding:0.55rem 0.75rem; border-radius:10px; border:1px solid #ffedd5;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.72rem; color:#d97706; font-weight:700;">유지점검 최종 (10만↓)</span>
+                            <span style="font-size:1rem; font-weight:900; color:#d97706;">${state.results.costs.maintenance.toLocaleString()}원</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="font-size:0.7rem; color:#94a3b8; margin-top:1.2rem; line-height:1.6; background:#f8fafc; padding:0.75rem; border-radius:8px; border:1px solid #f1f5f9;">
+            <div style="font-weight:600; color:#64748b; margin-bottom:0.2rem;">산출 기준 근거</div>
+            • 설비별 투입비율: EQUIPMENT_RATIOS(constants.js) 기반 특급/고급/중급 인원 기여도 합산<br>
+            • 인원 할인율: personnelDiscount(조건표) 적용 후 Math.floor() 내림<br>
+            • 비용: (인원 × 노임단가) 합산 후 경비(10%) + 제경비(110%) + 기술료(20%), 합계에서 10만원 단위 절사<br>
+            • 유지점검: 특급기술자 미포함 (고급+중급만 산출)
+        </div>
+    `;
 }
 
 document.querySelectorAll('[data-admin-tab]').forEach(btn => {
@@ -1198,6 +1625,7 @@ document.querySelectorAll('[data-admin-tab]').forEach(btn => {
         document.querySelectorAll('.admin-tab-content').forEach(content => {
             content.style.display = (content.id === targetTab) ? 'flex' : 'none';
         });
+        if (targetTab === 'tab-admin-debug') renderAdminDebug();
     });
 });
 
@@ -1248,7 +1676,7 @@ document.querySelectorAll('.btn-adj').forEach(btn => {
         const area = state.floorArea || 0;
         if (area < 5000) return;
         const condition = lookupCondition(area);
-        const currentBase = state.condOverride[stateKey] ?? condition[stateKey];
+        const currentBase = state.condOverride[stateKey] ?? condition[stateKey] ?? 0;
 
         const isCostField = COST_FIELDS.has(targetId);
         const adjFactor = getAdjFactor();
@@ -1301,7 +1729,7 @@ document.querySelectorAll('.btn-adj-discount').forEach(btn => {
 // ---- Step Navigation Wizard ----
 let currentStep = 1;
 
-window.goToStep = function(step) {
+window.goToStep = function (step) {
     if (step === 2 && currentStep === 1) {
         if (!state.address) {
             alert("주소를 먼저 검색하고 선택해주세요.");
@@ -1309,14 +1737,27 @@ window.goToStep = function(step) {
         }
     }
     if (step === 3 && currentStep === 2) {
-        if (!state.floorArea || state.floorArea < 5000) {
-            alert("연면적이 부족하거나 입력되지 않았습니다. (최소 5,000㎡)");
+        if (!state.floorArea || state.floorArea < 1) {
+            alert("연면적을 입력해주세요.");
             return;
         }
         if (!state.customerName || !state.customerName.trim()) {
             alert("대상처명(고객명)을 입력해주세요.");
             document.getElementById('customer-name').focus();
             return;
+        }
+        // 창고시설 차단
+        if ((state.purpose || '').includes('창고')) {
+            alert('창고시설은 견적 작성 대상이 아닙니다.');
+            return;
+        }
+        // 학교: 위탁선임 월 단가 65만원 자동 설정
+        if ((state.purpose || '').includes('학교')) {
+            if (state.condOverride.monthlyAppointment == null) {
+                state.condOverride.monthlyAppointment = 650000;
+                state.condOverride.yearlyAppointment = 7800000;
+                calculate();
+            }
         }
     }
 
@@ -1376,6 +1817,85 @@ if (window._kakaoPostcodeLoaded) {
 } else {
     window._onKakaoPostcodeReady = _startKakaoSearch;
 }
+
+// ---- 기계사업부: 설비 수량 입력 UI 동적 렌더링 (리스트 행 + 그룹 토글) ----
+(function renderEquipmentInputs() {
+    const container = document.getElementById('equipment-inputs');
+    if (!container) return;
+    const groups = window.CONSTANTS.EQUIPMENT_GROUPS || [];
+    let html = '';
+    groups.forEach((group, gi) => {
+        const bodyId = `eq-group-body-${gi}`;
+        const arrowId = `eq-group-arrow-${gi}`;
+        // 첫 번째 그룹만 기본 펼침, 나머지는 접힘
+        const isOpen = gi === 0;
+        html += `
+        <div style="margin-bottom:0.75rem; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
+            <!-- 그룹 헤더 (클릭으로 토글) -->
+            <button type="button" data-eq-toggle="${gi}"
+                style="width:100%; display:flex; align-items:center; justify-content:space-between;
+                       padding:0.65rem 0.9rem; background:#eff6ff; border:none; cursor:pointer;
+                       border-left:4px solid var(--toss-blue, #3b82f6); gap:0.5rem;">
+                <span style="display:flex; align-items:center; gap:0.45rem; font-size:0.95rem; font-weight:700;
+                             color:var(--toss-text-main); letter-spacing:-0.01em;">
+                    <i class="fas fa-layer-group" style="color:var(--toss-blue, #3b82f6); font-size:0.85rem;"></i>
+                    ${group.group}
+                    <span style="font-size:0.75rem; font-weight:500; color:var(--toss-text-sub);
+                                 background:white; border:1px solid #e5e7eb; border-radius:99px;
+                                 padding:1px 8px; margin-left:2px;">${group.items.length}종</span>
+                </span>
+                <i id="${arrowId}" class="fas fa-chevron-${isOpen ? 'up' : 'down'}"
+                   style="color:var(--toss-text-sub); font-size:0.8rem; transition:transform 0.2s;"></i>
+            </button>
+            <!-- 그룹 바디 (항목 리스트) -->
+            <div id="${bodyId}" style="display:${isOpen ? 'block' : 'none'};">`;
+        group.items.forEach((item, idx) => {
+            const isLast = idx === group.items.length - 1;
+            html += `
+                <div style="display:flex; align-items:center; justify-content:space-between;
+                            padding:0.55rem 0.9rem;
+                            border-top:1px solid #f3f4f6;
+                            background:white;">
+                    <span style="font-size:0.875rem; color:var(--toss-text-main); font-weight:500;">${item}</span>
+                    <div style="display:flex; align-items:center; gap:0;">
+                        <button type="button" data-eq-minus="${item}"
+                            style="width:32px; height:32px; border:1px solid #e5e7eb; border-radius:8px 0 0 8px;
+                                   background:#f9fafb; font-size:1.1rem; cursor:pointer;
+                                   color:#6b7280; flex-shrink:0;">−</button>
+                        <input type="number" min="0" value="${state.equipmentQty[item] || 0}"
+                            data-equipment="${item}"
+                            style="width:52px; height:32px; border-top:1px solid #e5e7eb; border-bottom:1px solid #e5e7eb;
+                                   border-left:none; border-right:none;
+                                   font-size:0.95rem; font-weight:600; text-align:center;
+                                   background:white; color:var(--toss-text-main);">
+                        <button type="button" data-eq-plus="${item}"
+                            style="width:32px; height:32px; border:1px solid #e5e7eb; border-radius:0 8px 8px 0;
+                                   background:#eff6ff; font-size:1.1rem; cursor:pointer;
+                                   color:var(--toss-blue, #3b82f6); flex-shrink:0;">+</button>
+                    </div>
+                </div>`;
+        });
+        html += `</div></div>`;
+    });
+    container.innerHTML = html;
+
+    // 그룹 토글 클릭 이벤트
+    container.addEventListener('click', e => {
+        const toggleBtn = e.target.closest('[data-eq-toggle]');
+        if (!toggleBtn) return;
+        const gi = toggleBtn.dataset.eqToggle;
+        const body = document.getElementById(`eq-group-body-${gi}`);
+        const arrow = document.getElementById(`eq-group-arrow-${gi}`);
+        if (!body) return;
+        const isOpen = body.style.display !== 'none';
+        body.style.display = isOpen ? 'none' : 'block';
+        if (arrow) {
+            arrow.className = isOpen
+                ? 'fas fa-chevron-down'
+                : 'fas fa-chevron-up';
+        }
+    });
+})();
 
 // Start at Step 1
 goToStep(1);
